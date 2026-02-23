@@ -1,5 +1,6 @@
 use crate::audio::RecordingRuntime;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -34,6 +35,7 @@ pub struct AiLogEntry {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(default)]
 pub struct AppSettings {
     pub auto_start: bool,
     pub start_on_login: bool,
@@ -70,6 +72,62 @@ impl Default for AppSettings {
     }
 }
 
+impl AppSettings {
+    fn settings_dir() -> Result<PathBuf, String> {
+        let base = dirs::config_dir()
+            .ok_or_else(|| "設定ディレクトリを取得できませんでした".to_string())?;
+        Ok(base.join("kanpe"))
+    }
+
+    fn settings_path() -> Result<PathBuf, String> {
+        Ok(Self::settings_dir()?.join("settings.json"))
+    }
+
+    pub fn load_from_disk() -> Result<Option<Self>, String> {
+        let path = Self::settings_path()?;
+        if !path.exists() {
+            return Ok(None);
+        }
+
+        let raw = std::fs::read_to_string(&path).map_err(|e| {
+            format!(
+                "設定ファイルの読み込みに失敗しました ({}): {}",
+                path.display(),
+                e
+            )
+        })?;
+        let parsed = serde_json::from_str::<Self>(&raw).map_err(|e| {
+            format!(
+                "設定ファイルの解析に失敗しました ({}): {}",
+                path.display(),
+                e
+            )
+        })?;
+        Ok(Some(parsed))
+    }
+
+    pub fn save_to_disk(&self) -> Result<(), String> {
+        let dir = Self::settings_dir()?;
+        std::fs::create_dir_all(&dir).map_err(|e| {
+            format!(
+                "設定ディレクトリの作成に失敗しました ({}): {}",
+                dir.display(),
+                e
+            )
+        })?;
+
+        let path = dir.join("settings.json");
+        let raw = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
+        std::fs::write(&path, raw).map_err(|e| {
+            format!(
+                "設定ファイルの保存に失敗しました ({}): {}",
+                path.display(),
+                e
+            )
+        })
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PermissionStatus {
     pub microphone: String,
@@ -86,9 +144,21 @@ pub struct AppState {
 
 impl AppState {
     pub fn new() -> Self {
+        let settings = match AppSettings::load_from_disk() {
+            Ok(Some(saved)) => saved,
+            Ok(None) => AppSettings::default(),
+            Err(err) => {
+                log::warn!(
+                    "Failed to load app settings. Falling back to defaults: {}",
+                    err
+                );
+                AppSettings::default()
+            }
+        };
+
         Self {
             sessions: Mutex::new(Vec::new()),
-            settings: Mutex::new(AppSettings::default()),
+            settings: Mutex::new(settings),
             active_session_id: Mutex::new(None),
             recording_runtime: Mutex::new(None),
         }

@@ -29,6 +29,8 @@ const KEEP_ALIVE_PAYLOAD: &str = r#"{"type":"KeepAlive"}"#;
 const FINALIZE_PAYLOAD: &str = r#"{"type":"Finalize"}"#;
 const LATENCY_WARN_THRESHOLD_MS: f64 = 1_500.0;
 const LATENCY_WARN_STEP_MS: f64 = 500.0;
+const MIX_DIAGNOSTIC_LOG_INTERVAL_SECS: u64 = 1;
+const DBFS_FLOOR: f64 = -120.0;
 
 pub struct RecordingRuntime {
     pub stop_tx: broadcast::Sender<()>,
@@ -66,6 +68,7 @@ enum CaptureHandle {
 #[derive(Default)]
 struct StreamLatencyMonitor {
     last_warn_bucket: Option<u64>,
+    latest_lag_ms: Option<f64>,
 }
 
 impl StreamLatencyMonitor {
@@ -75,6 +78,7 @@ impl StreamLatencyMonitor {
         };
 
         let lag_ms = ((audio_cursor_seconds - transcript_cursor_seconds) * 1_000.0).max(0.0);
+        self.latest_lag_ms = Some(lag_ms);
         if lag_ms < LATENCY_WARN_THRESHOLD_MS {
             self.last_warn_bucket = None;
             return;
@@ -91,6 +95,119 @@ impl StreamLatencyMonitor {
             audio_cursor_seconds,
             transcript_cursor_seconds
         );
+    }
+
+    fn latest_lag_ms(&self) -> Option<f64> {
+        self.latest_lag_ms
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DominantSource {
+    Mic,
+    Sys,
+    Balanced,
+    Unknown,
+}
+
+impl DominantSource {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Mic => "MIC",
+            Self::Sys => "SYS",
+            Self::Balanced => "BALANCED",
+            Self::Unknown => "UNKNOWN",
+        }
+    }
+}
+
+struct MixDiagnostics {
+    window_start: Instant,
+    mic_db_sum: f64,
+    mic_db_count: usize,
+    sys_db_sum: f64,
+    sys_db_count: usize,
+    last_dominant: DominantSource,
+}
+
+impl MixDiagnostics {
+    fn new() -> Self {
+        Self {
+            window_start: Instant::now(),
+            mic_db_sum: 0.0,
+            mic_db_count: 0,
+            sys_db_sum: 0.0,
+            sys_db_count: 0,
+            last_dominant: DominantSource::Unknown,
+        }
+    }
+
+    fn observe_mic(&mut self, samples: &[i16]) {
+        let db = rms_dbfs(samples);
+        self.mic_db_sum += db;
+        self.mic_db_count += 1;
+    }
+
+    fn observe_sys(&mut self, samples: &[i16]) {
+        let db = rms_dbfs(samples);
+        self.sys_db_sum += db;
+        self.sys_db_count += 1;
+    }
+
+    fn emit_if_due(
+        &mut self,
+        mic_buffer_frames: usize,
+        sys_buffer_frames: usize,
+        deepgram_lag_ms: Option<f64>,
+    ) {
+        if self.window_start.elapsed() < Duration::from_secs(MIX_DIAGNOSTIC_LOG_INTERVAL_SECS) {
+            return;
+        }
+
+        let mic_db_avg = if self.mic_db_count > 0 {
+            self.mic_db_sum / self.mic_db_count as f64
+        } else {
+            DBFS_FLOOR
+        };
+        let sys_db_avg = if self.sys_db_count > 0 {
+            self.sys_db_sum / self.sys_db_count as f64
+        } else {
+            DBFS_FLOOR
+        };
+
+        let dominant = detect_dominant_source(mic_db_avg, sys_db_avg);
+        if dominant != self.last_dominant {
+            log::info!(
+                "Mix dominant changed: {} -> {} (mic_avg={:.1}dBFS, sys_avg={:.1}dBFS)",
+                self.last_dominant.as_str(),
+                dominant.as_str(),
+                mic_db_avg,
+                sys_db_avg
+            );
+            self.last_dominant = dominant;
+        }
+
+        let lag_text = deepgram_lag_ms
+            .map(|v| format!("{:.0}", v))
+            .unwrap_or_else(|| "n/a".to_string());
+
+        log::info!(
+            "Mix diag: mic_avg={:.1}dBFS sys_avg={:.1}dBFS dominant={} mic_buf={}ms sys_buf={}ms dg_lag={}ms mic_samples={} sys_samples={}",
+            mic_db_avg,
+            sys_db_avg,
+            dominant.as_str(),
+            frames_to_ms(mic_buffer_frames),
+            frames_to_ms(sys_buffer_frames),
+            lag_text,
+            self.mic_db_count,
+            self.sys_db_count
+        );
+
+        self.window_start = Instant::now();
+        self.mic_db_sum = 0.0;
+        self.mic_db_count = 0;
+        self.sys_db_sum = 0.0;
+        self.sys_db_count = 0;
     }
 }
 
@@ -530,6 +647,7 @@ where
     let mut dropped_secondary_frames = 0usize;
     let mut last_drop_log = Instant::now();
     let mut latency_monitor = StreamLatencyMonitor::default();
+    let mut mix_diagnostics = MixDiagnostics::new();
 
     let loop_result: Result<(), String> = loop {
         tokio::select! {
@@ -540,6 +658,7 @@ where
                         let (latest_pcm, dropped) = drain_audio_backlog(&mut rx_primary, pcm);
                         dropped_primary_chunks += dropped;
                         let resampled = resample_i16_mono(&latest_pcm, rate_primary, MIX_SAMPLE_RATE);
+                        mix_diagnostics.observe_mic(&resampled);
                         dropped_primary_frames +=
                             extend_buffer_with_cap(&mut buf_primary, &resampled, MAX_MIX_BACKLOG_FRAMES);
                     }
@@ -554,6 +673,7 @@ where
                         let (latest_pcm, dropped) = drain_audio_backlog(&mut rx_secondary, pcm);
                         dropped_secondary_chunks += dropped;
                         let resampled = resample_i16_mono(&latest_pcm, rate_secondary, MIX_SAMPLE_RATE);
+                        mix_diagnostics.observe_sys(&resampled);
                         dropped_secondary_frames +=
                             extend_buffer_with_cap(&mut buf_secondary, &resampled, MAX_MIX_BACKLOG_FRAMES);
                     }
@@ -588,6 +708,12 @@ where
                     }
                     last_drop_log = Instant::now();
                 }
+
+                mix_diagnostics.emit_if_due(
+                    buf_primary.len(),
+                    buf_secondary.len(),
+                    latency_monitor.latest_lag_ms(),
+                );
 
                 if primary_closed && secondary_closed && buf_primary.is_empty() && buf_secondary.is_empty() {
                     break Ok(());
@@ -981,6 +1107,43 @@ fn extend_buffer_with_cap(buffer: &mut VecDeque<i16>, samples: &[i16], max_frame
     let overflow = buffer.len() - max_frames;
     buffer.drain(..overflow);
     overflow
+}
+
+fn rms_dbfs(samples: &[i16]) -> f64 {
+    if samples.is_empty() {
+        return DBFS_FLOOR;
+    }
+
+    let power_sum = samples
+        .iter()
+        .map(|&s| {
+            let v = s as f64;
+            v * v
+        })
+        .sum::<f64>();
+    let rms = (power_sum / samples.len() as f64).sqrt();
+    if rms <= 0.0 {
+        return DBFS_FLOOR;
+    }
+
+    let full_scale = i16::MAX as f64;
+    let normalized = (rms / full_scale).clamp(1e-9, 1.0);
+    (20.0 * normalized.log10()).max(DBFS_FLOOR)
+}
+
+fn detect_dominant_source(mic_db_avg: f64, sys_db_avg: f64) -> DominantSource {
+    let delta = mic_db_avg - sys_db_avg;
+    if delta > 3.0 {
+        DominantSource::Mic
+    } else if delta < -3.0 {
+        DominantSource::Sys
+    } else {
+        DominantSource::Balanced
+    }
+}
+
+fn frames_to_ms(frames: usize) -> usize {
+    frames.saturating_mul(1_000) / MIX_SAMPLE_RATE as usize
 }
 
 fn pcm_i16_to_le_bytes(samples: &[i16]) -> Vec<u8> {

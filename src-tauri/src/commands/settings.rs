@@ -52,5 +52,8 @@ pub async fn update_settings(state: State<'_, AppState>, settings: Value) -> Res
         current.auto_delete = v.to_string();
     }
 
-    Ok(())
+    let snapshot = current.clone();
+    drop(current);
+
+    snapshot.save_to_disk()
 }
