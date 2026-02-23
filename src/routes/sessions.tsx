@@ -3,7 +3,9 @@ import { useNavigate } from "react-router";
 import { ScreenSessionList } from "@/components/kanpe/screen-session-list";
 import { ScreenSettings } from "@/components/kanpe/screen-settings";
 import { useAppStore } from "@/stores/app-store";
+import { useSessionStore } from "@/stores/session-store";
 import { useTauriEvents } from "@/hooks/use-tauri-events";
+import { showOverlay, startRecording } from "@/lib/tauri";
 import { t } from "@/lib/i18n";
 
 export function SessionsPage() {
@@ -12,19 +14,34 @@ export function SessionsPage() {
   const setLocale = useAppStore((s) => s.setLocale);
   const d = t(locale);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
 
   useTauriEvents();
 
+  const extractErrorMessage = (error: unknown): string => {
+    if (typeof error === "string") return error;
+    if (error && typeof error === "object") {
+      const candidate = error as { message?: unknown };
+      if (typeof candidate.message === "string") return candidate.message;
+      try {
+        return JSON.stringify(error);
+      } catch {
+        // fallthrough
+      }
+    }
+    return "Start Kanpeに失敗しました。設定を確認してください。";
+  };
+
   const handleStartKanpe = async () => {
     try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      // Start recording, which returns a session ID
-      await invoke("start_recording");
-      // Show the overlay window
-      await invoke("show_overlay");
-    } catch {
-      // In dev mode without Tauri, just log
-      console.log("Start Kanpe (dev mode)");
+      setStartError(null);
+      useSessionStore.getState().clearCaptions();
+      const sessionId = await startRecording();
+      useSessionStore.setState({ activeSessionId: sessionId });
+      await showOverlay();
+    } catch (error) {
+      console.error("Failed to start Kanpe:", error);
+      setStartError(extractErrorMessage(error));
     }
   };
 
@@ -35,6 +52,7 @@ export function SessionsPage() {
         onSelectSession={(id) => navigate(`/sessions/${id}`)}
         onOpenSettings={() => setSettingsOpen(true)}
         onStartKanpe={handleStartKanpe}
+        startError={startError}
       />
 
       {/* Settings Modal */}

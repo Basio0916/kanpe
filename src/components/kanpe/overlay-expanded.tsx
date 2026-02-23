@@ -20,15 +20,9 @@ import {
 } from "lucide-react"
 import type { Dict } from "@/lib/i18n"
 import type { OverlayVisualMode } from "@/stores/ui-settings-store"
+import { useSessionStore } from "@/stores/session-store"
 
 type RightPaneAction = "recap" | "assist" | "question" | "action"
-
-interface CaptionEntry {
-  time: string
-  source: "MIC" | "SYS"
-  status: "interim" | "final"
-  text: string
-}
 
 interface LLMMessage {
   role: "user" | "assistant"
@@ -46,16 +40,6 @@ interface OverlayExpandedProps {
   onClose: () => void
   onStartDrag: () => void
 }
-
-const MOCK_CAPTIONS: CaptionEntry[] = [
-  { time: "14:32:01", source: "MIC", status: "final", text: "Let me report on the project progress." },
-  { time: "14:32:08", source: "SYS", status: "final", text: "Sure, go ahead. How did last week's milestone go?" },
-  { time: "14:32:15", source: "MIC", status: "final", text: "Frontend implementation is 95% complete. Only responsive support remains." },
-  { time: "14:32:22", source: "SYS", status: "final", text: "How about the backend? Are the API integration tests done?" },
-  { time: "14:32:28", source: "MIC", status: "final", text: "API integration tests are still pending, expected to finish by Tuesday." },
-  { time: "14:32:35", source: "SYS", status: "final", text: "Got it. Any other blockers?" },
-  { time: "14:32:40", source: "MIC", status: "interim", text: "Currently, no major issues..." },
-]
 
 function getActionConfig(d: Dict) {
   return {
@@ -109,6 +93,7 @@ export function OverlayExpanded({
   const [messages, setMessages] = useState<LLMMessage[]>([])
   const [isGenerating, setIsGenerating] = useState(false)
   const [activeAction, setActiveAction] = useState<RightPaneAction | null>(null)
+  const captions = useSessionStore((s) => s.captions)
   const captionEndRef = useRef<HTMLDivElement>(null)
   const lastUserMsgRef = useRef<HTMLDivElement>(null)
   const chatScrollContainerRef = useRef<HTMLDivElement>(null)
@@ -117,9 +102,19 @@ export function OverlayExpanded({
       ? "bg-[rgba(24,24,28,0.56)] backdrop-blur-2xl"
       : "bg-[rgba(24,24,28,0.78)] backdrop-blur-none"
 
+  const sourceBadgeClass = (source: string) => {
+    if (source === "MIC") return "bg-primary/15 text-primary"
+    if (source === "SYS") return "bg-success/15 text-success"
+    if (source === "SPK1") return "bg-primary/15 text-primary"
+    if (source === "SPK2") return "bg-success/15 text-success"
+    if (source === "SPK3") return "bg-warning/15 text-warning"
+    if (source === "SPK4") return "bg-accent/20 text-accent-foreground"
+    return "bg-secondary text-foreground"
+  }
+
   useEffect(() => {
     captionEndRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [])
+  }, [captions.length])
 
   // Scroll so the latest user message is pinned at the top of the chat viewport
   useEffect(() => {
@@ -269,14 +264,19 @@ export function OverlayExpanded({
             <MessageSquareText className="h-3.5 w-3.5 text-primary" />
             <span className="text-xs font-semibold text-foreground">{d.liveCaption}</span>
             <span className="ml-auto text-[10px] text-muted-foreground font-mono">
-              {MOCK_CAPTIONS.length} {d.entries}
+              {captions.length} {d.entries}
             </span>
           </div>
           <div className="flex-1 overflow-y-auto">
             <div className="flex flex-col gap-0.5 p-2">
-              {MOCK_CAPTIONS.map((entry, i) => (
+              {captions.length === 0 && (
+                <div className="rounded-lg px-2 py-2 text-xs text-muted-foreground">
+                  Waiting for live captions...
+                </div>
+              )}
+              {captions.map((entry, i) => (
                 <div
-                  key={i}
+                  key={`${entry.time}-${i}`}
                   className={`flex items-start gap-1.5 rounded-lg px-2 py-1.5 ${
                     entry.status === "interim" ? "bg-primary/5" : "bg-transparent"
                   }`}
@@ -286,7 +286,7 @@ export function OverlayExpanded({
                   </span>
                   <span
                     className={`shrink-0 rounded px-1 py-0.5 text-[9px] font-bold leading-none mt-1 ${
-                      entry.source === "MIC" ? "bg-primary/15 text-primary" : "bg-success/15 text-success"
+                      sourceBadgeClass(entry.source)
                     }`}
                   >
                     {entry.source}

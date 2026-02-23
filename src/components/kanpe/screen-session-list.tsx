@@ -40,9 +40,16 @@ interface ScreenSessionListProps {
   onSelectSession: (id: string) => void
   onOpenSettings: () => void
   onStartKanpe?: () => void
+  startError?: string | null
 }
 
-export function ScreenSessionList({ dict: d, onSelectSession, onOpenSettings, onStartKanpe }: ScreenSessionListProps) {
+export function ScreenSessionList({
+  dict: d,
+  onSelectSession,
+  onOpenSettings,
+  onStartKanpe,
+  startError = null,
+}: ScreenSessionListProps) {
   const [hoveredId, setHoveredId] = useState<string | null>(null)
 
   const groupLabel = (g: "today" | "yesterday") => (g === "today" ? d.today : d.yesterday)
@@ -87,6 +94,11 @@ export function ScreenSessionList({ dict: d, onSelectSession, onOpenSettings, on
       {/* Subtitle */}
       <div className="px-6 pt-1 pb-4">
         <p className="text-xs text-muted-foreground">{d.noUpcomingMeetings}</p>
+        {startError && (
+          <div className="mt-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+            {startError}
+          </div>
+        )}
       </div>
 
       {/* Session list */}

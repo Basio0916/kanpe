@@ -3,7 +3,10 @@ import { OverlayMinibar } from "./components/kanpe/overlay-minibar";
 import { OverlayExpanded } from "./components/kanpe/overlay-expanded";
 import { useOverlayStore } from "./stores/overlay-store";
 import { useAppStore } from "./stores/app-store";
+import { useSessionStore } from "./stores/session-store";
 import { useUiSettingsStore } from "./stores/ui-settings-store";
+import { useTauriEvents } from "./hooks/use-tauri-events";
+import { pauseRecording, resumeRecording } from "./lib/tauri";
 import { t } from "./lib/i18n";
 
 const OVERLAY_MINIBAR_SIZE = { width: 460, height: 54 };
@@ -12,14 +15,24 @@ const OVERLAY_EXPANDED_SIZE = { width: 780, height: 360 };
 export default function OverlayApp() {
   const [expanded, setExpanded] = useState(false);
   const { recording, connection } = useOverlayStore();
+  const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const locale = useAppStore((s) => s.locale);
   const overlayVisualMode = useUiSettingsStore((s) => s.overlayVisualMode);
   const d = t(locale);
 
-  const toggleRecording = () => {
-    useOverlayStore.setState({
-      recording: recording === "recording" ? "paused" : "recording",
-    });
+  useTauriEvents();
+
+  const toggleRecording = async () => {
+    if (!activeSessionId) return;
+    try {
+      if (recording === "recording") {
+        await pauseRecording(activeSessionId);
+      } else {
+        await resumeRecording(activeSessionId);
+      }
+    } catch (error) {
+      console.error("Failed to toggle recording:", error);
+    }
   };
 
   const handleClose = async () => {

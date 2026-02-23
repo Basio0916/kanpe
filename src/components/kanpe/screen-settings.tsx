@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import {
   Settings,
   Shield,
@@ -13,6 +13,7 @@ import {
 import type { Dict, Locale } from "@/lib/i18n"
 import { useUiSettingsStore } from "@/stores/ui-settings-store"
 import type { OverlayVisualMode } from "@/stores/ui-settings-store"
+import { getSettings, updateSettings } from "@/lib/tauri"
 
 type SettingsSection = "general" | "language" | "permissions" | "audio" | "stt" | "hotkeys" | "data"
 
@@ -29,6 +30,42 @@ export function ScreenSettings({ dict: d, locale, onLocaleChange, onClose }: Scr
   const [llmLang, setLlmLang] = useState("en")
   const overlayVisualMode = useUiSettingsStore((s) => s.overlayVisualMode)
   const setOverlayVisualMode = useUiSettingsStore((s) => s.setOverlayVisualMode)
+
+  useEffect(() => {
+    let mounted = true
+    const loadSettings = async () => {
+      try {
+        const settings = await getSettings()
+        if (!mounted) return
+        setSttLang(settings.stt_language || "en")
+        setLlmLang(settings.llm_language || "en")
+      } catch (error) {
+        console.error("Failed to load settings:", error)
+      }
+    }
+    void loadSettings()
+    return () => {
+      mounted = false
+    }
+  }, [])
+
+  const handleSttLanguageChange = async (value: string) => {
+    setSttLang(value)
+    try {
+      await updateSettings({ stt_language: value })
+    } catch (error) {
+      console.error("Failed to update STT language setting:", error)
+    }
+  }
+
+  const handleLlmLanguageChange = async (value: string) => {
+    setLlmLang(value)
+    try {
+      await updateSettings({ llm_language: value })
+    } catch (error) {
+      console.error("Failed to update LLM language setting:", error)
+    }
+  }
 
   const SECTIONS: { id: SettingsSection; label: string; icon: React.ReactNode }[] = [
     { id: "general", label: d.general, icon: <Settings className="h-4 w-4" /> },
@@ -152,7 +189,7 @@ export function ScreenSettings({ dict: d, locale, onLocaleChange, onClose }: Scr
                 <SettingRow label={d.sttLanguage} description={d.sttLanguageDesc}>
                   <select
                     value={sttLang}
-                    onChange={(e) => setSttLang(e.target.value)}
+                    onChange={(e) => void handleSttLanguageChange(e.target.value)}
                     className="w-52 rounded-lg bg-secondary border border-border px-3 py-1.5 text-sm text-foreground outline-none focus:border-primary/40"
                   >
                     {LANGUAGES.map((lang) => (
@@ -165,7 +202,7 @@ export function ScreenSettings({ dict: d, locale, onLocaleChange, onClose }: Scr
                 <SettingRow label={d.llmLanguage} description={d.llmLanguageDesc}>
                   <select
                     value={llmLang}
-                    onChange={(e) => setLlmLang(e.target.value)}
+                    onChange={(e) => void handleLlmLanguageChange(e.target.value)}
                     className="w-52 rounded-lg bg-secondary border border-border px-3 py-1.5 text-sm text-foreground outline-none focus:border-primary/40"
                   >
                     {LANGUAGES.map((lang) => (
@@ -258,7 +295,7 @@ export function ScreenSettings({ dict: d, locale, onLocaleChange, onClose }: Scr
                 </SettingRow>
                 <SettingRow label={d.languageLabel} description={d.languageLabelDesc}>
                   <div className="rounded-lg bg-secondary border border-border px-3 py-1.5">
-                    <span className="text-sm font-mono text-foreground">ja</span>
+                    <span className="text-sm font-mono text-foreground">{sttLang}</span>
                   </div>
                 </SettingRow>
                 <SettingRow label={d.interimResults} description={d.interimResultsDesc}>
