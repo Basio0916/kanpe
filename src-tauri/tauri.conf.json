@@ -10,6 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
         "label": "main",
@@ -26,9 +27,11 @@
       {
         "label": "overlay",
         "title": "Kanpe Overlay",
-        "width": 800,
-        "height": 200,
+        "width": 460,
+        "height": 54,
+        "backgroundColor": "#00000000",
         "decorations": false,
+        "shadow": false,
         "transparent": true,
         "alwaysOnTop": true,
         "resizable": true,

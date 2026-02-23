@@ -6,6 +6,7 @@
     "core:default",
     "core:window:default",
     "core:window:allow-hide",
+    "core:window:allow-start-dragging",
     "core:window:allow-set-size",
     "core:event:default",
     "core:event:allow-listen",

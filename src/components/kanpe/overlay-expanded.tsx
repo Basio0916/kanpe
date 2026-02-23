@@ -19,6 +19,7 @@ import {
   Sparkles,
 } from "lucide-react"
 import type { Dict } from "@/lib/i18n"
+import type { OverlayVisualMode } from "@/stores/ui-settings-store"
 
 type RightPaneAction = "recap" | "assist" | "question" | "action"
 
@@ -38,10 +39,12 @@ interface OverlayExpandedProps {
   dict: Dict
   recording: "recording" | "paused"
   connection: "connected" | "reconnecting" | "disconnected"
+  overlayVisualMode: OverlayVisualMode
   permissionMissing?: boolean
   onCollapse: () => void
   onToggleRecording: () => void
   onClose: () => void
+  onStartDrag: () => void
 }
 
 const MOCK_CAPTIONS: CaptionEntry[] = [
@@ -94,10 +97,12 @@ export function OverlayExpanded({
   dict: d,
   recording,
   connection,
+  overlayVisualMode,
   permissionMissing = false,
   onCollapse,
   onToggleRecording,
   onClose,
+  onStartDrag,
 }: OverlayExpandedProps) {
   const ACTION_CONFIG = getActionConfig(d)
   const [inputValue, setInputValue] = useState("")
@@ -107,6 +112,10 @@ export function OverlayExpanded({
   const captionEndRef = useRef<HTMLDivElement>(null)
   const lastUserMsgRef = useRef<HTMLDivElement>(null)
   const chatScrollContainerRef = useRef<HTMLDivElement>(null)
+  const surfaceClassName =
+    overlayVisualMode === "blur"
+      ? "bg-[rgba(24,24,28,0.56)] backdrop-blur-2xl"
+      : "bg-[rgba(24,24,28,0.78)] backdrop-blur-none"
 
   useEffect(() => {
     captionEndRef.current?.scrollIntoView({ behavior: "smooth" })
@@ -171,14 +180,19 @@ export function OverlayExpanded({
   }
 
   return (
-    <div className="flex w-[780px] flex-col rounded-2xl bg-[var(--glass)] backdrop-blur-2xl border border-[var(--glass-border)] shadow-2xl shadow-black/40 overflow-hidden resize-y" style={{ minHeight: 160, maxHeight: "70vh" }}>
+    <div
+      className={`flex h-full w-full flex-col overflow-hidden rounded-2xl ${surfaceClassName}`}
+      style={{ minHeight: 340 }}
+    >
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--glass-border)]">
-        <div className="flex items-center gap-2">
-          <div className="flex h-6 w-6 items-center justify-center rounded-lg bg-primary">
-            <span className="text-[10px] font-bold text-primary-foreground">K</span>
+        <div className="flex items-center gap-2 cursor-move select-none" onMouseDown={onStartDrag}>
+          <div className="flex items-center gap-2">
+            <div className="flex h-6 w-6 items-center justify-center rounded-lg bg-primary">
+              <span className="text-[10px] font-bold text-primary-foreground">K</span>
+            </div>
+            <span className="text-sm font-semibold text-foreground">Kanpe</span>
           </div>
-          <span className="text-sm font-semibold text-foreground">Kanpe</span>
           <div className="flex items-center gap-1.5 ml-2">
             {recording === "recording" ? (
               <>

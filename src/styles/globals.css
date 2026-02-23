@@ -98,4 +98,16 @@
   body {
     @apply bg-background text-foreground;
   }
+  html[data-overlay="true"],
+  body[data-overlay="true"],
+  #root[data-overlay="true"] {
+    width: 100%;
+    height: 100%;
+    background: transparent !important;
+  }
+  body[data-overlay="true"] {
+    margin: 0;
+    background: transparent !important;
+    overflow: hidden;
+  }
 }
