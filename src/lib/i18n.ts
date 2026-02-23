@@ -95,6 +95,10 @@ const en = {
   startOnLoginDesc: "Automatically launch Kanpe on macOS startup.",
   notifications: "Notifications",
   notificationsDesc: "Show AI assist notifications.",
+  overlayVisualMode: "Overlay Visual",
+  overlayVisualModeDesc: "Fix overlay rendering mode to avoid mixed transparency/blur behavior.",
+  overlayVisualTranslucent: "Translucent (No Blur)",
+  overlayVisualBlur: "Blur",
 
   // Language settings
   languageSettings: "Language Settings",
@@ -301,6 +305,10 @@ const ja: Record<DictKeys, string> = {
   startOnLoginDesc: "macOS起動時にKanpeを自動起動します。",
   notifications: "通知",
   notificationsDesc: "AIアシストの通知を表示します。",
+  overlayVisualMode: "オーバーレイ表示モード",
+  overlayVisualModeDesc: "半透明とブラーの挙動を固定します。",
+  overlayVisualTranslucent: "半透明（ブラーなし）",
+  overlayVisualBlur: "ブラー",
 
   // Language settings
   languageSettings: "言語設定",

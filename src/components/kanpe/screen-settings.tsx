@@ -11,6 +11,8 @@ import {
   X,
 } from "lucide-react"
 import type { Dict, Locale } from "@/lib/i18n"
+import { useUiSettingsStore } from "@/stores/ui-settings-store"
+import type { OverlayVisualMode } from "@/stores/ui-settings-store"
 
 type SettingsSection = "general" | "language" | "permissions" | "audio" | "stt" | "hotkeys" | "data"
 
@@ -25,6 +27,8 @@ export function ScreenSettings({ dict: d, locale, onLocaleChange, onClose }: Scr
   const [activeSection, setActiveSection] = useState<SettingsSection>("general")
   const [sttLang, setSttLang] = useState("en")
   const [llmLang, setLlmLang] = useState("en")
+  const overlayVisualMode = useUiSettingsStore((s) => s.overlayVisualMode)
+  const setOverlayVisualMode = useUiSettingsStore((s) => s.setOverlayVisualMode)
 
   const SECTIONS: { id: SettingsSection; label: string; icon: React.ReactNode }[] = [
     { id: "general", label: d.general, icon: <Settings className="h-4 w-4" /> },
@@ -112,6 +116,16 @@ export function ScreenSettings({ dict: d, locale, onLocaleChange, onClose }: Scr
                 </SettingRow>
                 <SettingRow label={d.notifications} description={d.notificationsDesc}>
                   <ToggleSwitch defaultOn={true} />
+                </SettingRow>
+                <SettingRow label={d.overlayVisualMode} description={d.overlayVisualModeDesc}>
+                  <select
+                    value={overlayVisualMode}
+                    onChange={(e) => setOverlayVisualMode(e.target.value as OverlayVisualMode)}
+                    className="w-52 rounded-lg bg-secondary border border-border px-3 py-1.5 text-sm text-foreground outline-none focus:border-primary/40"
+                  >
+                    <option value="translucent">{d.overlayVisualTranslucent}</option>
+                    <option value="blur">{d.overlayVisualBlur}</option>
+                  </select>
                 </SettingRow>
               </div>
             </div>
