@@ -31,7 +31,13 @@ pub struct AiLogEntry {
     pub time: String,
     #[serde(rename = "type")]
     pub log_type: String,
+    #[serde(default = "default_ai_log_role")]
+    pub role: String,
     pub text: String,
+}
+
+fn default_ai_log_role() -> String {
+    "assistant".to_string()
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

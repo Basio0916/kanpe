@@ -40,6 +40,7 @@ pub async fn send_ai_query(
         .filter(|v| !v.is_empty())
         .map(|v| v.to_lowercase());
     let action_config = action_config(action_key.as_deref());
+    let user_log_text = user_input_log_text(action_key.as_deref(), trimmed_query);
 
     let (llm_language, conversation_context) = {
         let settings = state.settings.lock().map_err(|e| e.to_string())?.clone();
@@ -80,10 +81,18 @@ pub async fn send_ai_query(
     {
         let mut sessions = state.sessions.lock().map_err(|e| e.to_string())?;
         if let Some(session) = sessions.iter_mut().find(|s| s.id == session_id) {
+            let now = Local::now().format("%H:%M:%S").to_string();
             session.ai_assists = session.ai_assists.saturating_add(1);
             session.ai_logs.push(AiLogEntry {
-                time: Local::now().format("%H:%M:%S").to_string(),
+                time: now.clone(),
                 log_type: action_config.log_type.to_string(),
+                role: "user".to_string(),
+                text: user_log_text,
+            });
+            session.ai_logs.push(AiLogEntry {
+                time: now,
+                log_type: action_config.log_type.to_string(),
+                role: "assistant".to_string(),
                 text: response.clone(),
             });
             save_sessions_to_disk(&sessions)?;
@@ -141,6 +150,17 @@ Capture action items from the whole conversation timeline (early, middle, recent
                 "Answer the query directly based on the conversation context. Keep it concise.",
             log_type: "freeform",
         },
+    }
+}
+
+fn user_input_log_text(action: Option<&str>, query: &str) -> String {
+    match action {
+        Some("recap") => "Recap".to_string(),
+        Some("assist") => "Assist".to_string(),
+        Some("question") => "Question".to_string(),
+        Some("action") => "Action".to_string(),
+        Some(other) => other.to_string(),
+        None => query.to_string(),
     }
 }
 
