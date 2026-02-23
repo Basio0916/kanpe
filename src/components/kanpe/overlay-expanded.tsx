@@ -19,7 +19,12 @@ import {
   Sparkles,
 } from "lucide-react"
 import type { Dict } from "@/lib/i18n"
-import { getActiveSessionId, getSettings, sendAiQuery, updateSettings } from "@/lib/tauri"
+import {
+  getActiveSessionId,
+  getSessionSelfSpeakerTags,
+  sendAiQuery,
+  updateSessionSelfSpeakerTags,
+} from "@/lib/tauri"
 import type { OverlayVisualMode } from "@/stores/ui-settings-store"
 import { useSessionStore } from "@/stores/session-store"
 
@@ -112,32 +117,33 @@ export function OverlayExpanded({
 
   useEffect(() => {
     let mounted = true
-    const loadSelfTag = async () => {
+    const loadSelfSpeakerTags = async () => {
+      if (!activeSessionId) {
+        setSelfSpeakerTags([])
+        return
+      }
       try {
-        const settings = await getSettings()
+        const tags = await getSessionSelfSpeakerTags(activeSessionId)
         if (!mounted) return
-        const tags =
-          Array.isArray(settings.self_speaker_tags) && settings.self_speaker_tags.length > 0
-            ? settings.self_speaker_tags
-            : settings.self_speaker_tag
-              ? [settings.self_speaker_tag]
-              : []
         const normalized = tags
           .map((tag) => normalizeSource(tag))
           .filter((tag, index, array) => !!tag && array.indexOf(tag) === index)
         setSelfSpeakerTags(normalized)
       } catch (error) {
-        console.error("Failed to load self speaker tag setting:", error)
+        if (mounted) setSelfSpeakerTags([])
+        console.error("Failed to load self speaker tags:", error)
       }
     }
-    void loadSelfTag()
+    void loadSelfSpeakerTags()
     return () => {
       mounted = false
     }
-  }, [])
+  }, [activeSessionId])
 
   const handleSourceTagClick = async (source: string) => {
     if (!isTagSelectable(source)) return
+    const sessionId = await resolveSessionId()
+    if (!sessionId) return
     const normalizedSource = normalizeSource(source)
     const prevTags = selfSpeakerTags
     const nextTags = isSelfSource(source)
@@ -147,12 +153,13 @@ export function OverlayExpanded({
         )
     setSelfSpeakerTags(nextTags)
     try {
-      await updateSettings({
-        self_speaker_tags: nextTags,
-        self_speaker_tag: nextTags[0] ?? "",
-      })
+      const persisted = await updateSessionSelfSpeakerTags(sessionId, nextTags)
+      const normalized = persisted
+        .map((tag) => normalizeSource(tag))
+        .filter((tag, index, array) => !!tag && array.indexOf(tag) === index)
+      setSelfSpeakerTags(normalized)
     } catch (error) {
-      console.error("Failed to update self speaker tag setting:", error)
+      console.error("Failed to update self speaker tags:", error)
       setSelfSpeakerTags(prevTags)
     }
   }
@@ -273,10 +280,10 @@ export function OverlayExpanded({
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault()
-      void handleSendFreeform()
-    }
+    if (e.key !== "Enter" || e.shiftKey) return
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return
+    e.preventDefault()
+    void handleSendFreeform()
   }
 
   return (

@@ -31,6 +31,19 @@ export async function getSession(id: string): Promise<SessionDetail> {
   return invoke("get_session", { id });
 }
 
+export async function getSessionSelfSpeakerTags(
+  sessionId: string,
+): Promise<string[]> {
+  return invoke("get_session_self_speaker_tags", { sessionId });
+}
+
+export async function updateSessionSelfSpeakerTags(
+  sessionId: string,
+  tags: string[],
+): Promise<string[]> {
+  return invoke("update_session_self_speaker_tags", { sessionId, tags });
+}
+
 export async function deleteSession(id: string): Promise<void> {
   return invoke("delete_session", { id });
 }
@@ -165,6 +178,7 @@ export interface SessionDetail {
   summary: string;
   participants: number;
   ai_assists: number;
+  self_speaker_tags: string[];
   stt_processing_time: string;
   ai_inference_count: number;
   audio_data_size: string;

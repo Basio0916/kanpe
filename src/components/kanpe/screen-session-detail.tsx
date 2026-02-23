@@ -1,7 +1,6 @@
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import { ArrowLeft, Share2, Copy, Download, Trash2 } from "lucide-react"
 import type { Dict } from "@/lib/i18n"
-import { getSettings } from "@/lib/tauri"
 import type { SessionDetail } from "@/lib/tauri"
 
 type DetailTab = "summary" | "caption" | "ai-log"
@@ -26,7 +25,6 @@ export function ScreenSessionDetail({
   onBack,
 }: ScreenSessionDetailProps) {
   const [activeTab, setActiveTab] = useState<DetailTab>("summary")
-  const [selfSpeakerTags, setSelfSpeakerTags] = useState<string[]>([])
 
   const sourceBadgeClass = (source: string) => {
     if (source === "MIC") return "bg-primary/15 text-primary"
@@ -39,34 +37,11 @@ export function ScreenSessionDetail({
   }
 
   const normalizeSource = (source: string) => source.trim().toUpperCase()
+  const selfSpeakerTags = (session?.self_speaker_tags ?? [])
+    .map((tag) => normalizeSource(tag))
+    .filter((tag, index, array) => !!tag && array.indexOf(tag) === index)
   const isSelfSource = (source: string) =>
     selfSpeakerTags.some((tag) => normalizeSource(tag) === normalizeSource(source))
-
-  useEffect(() => {
-    let mounted = true
-    const loadSelfSpeakerTags = async () => {
-      try {
-        const settings = await getSettings()
-        if (!mounted) return
-        const tags =
-          Array.isArray(settings.self_speaker_tags) && settings.self_speaker_tags.length > 0
-            ? settings.self_speaker_tags
-            : settings.self_speaker_tag
-              ? [settings.self_speaker_tag]
-              : []
-        const normalized = tags
-          .map((tag) => normalizeSource(tag))
-          .filter((tag, index, array) => !!tag && array.indexOf(tag) === index)
-        setSelfSpeakerTags(normalized)
-      } catch (error) {
-        console.error("Failed to load self speaker tags for session detail:", error)
-      }
-    }
-    void loadSelfSpeakerTags()
-    return () => {
-      mounted = false
-    }
-  }, [])
 
   const TAB_LABELS: Record<DetailTab, string> = {
     summary: d.summary,
