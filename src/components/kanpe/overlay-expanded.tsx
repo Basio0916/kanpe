@@ -185,8 +185,11 @@ export function OverlayExpanded({
       style={{ minHeight: 340 }}
     >
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--glass-border)]">
-        <div className="flex items-center gap-2 cursor-move select-none" onMouseDown={onStartDrag}>
+      <div
+        className="flex items-center justify-between px-4 py-3 border-b border-[var(--glass-border)] cursor-move select-none"
+        onMouseDown={onStartDrag}
+      >
+        <div className="flex items-center gap-2">
           <div className="flex items-center gap-2">
             <div className="flex h-6 w-6 items-center justify-center rounded-lg bg-primary">
               <span className="text-[10px] font-bold text-primary-foreground">K</span>
@@ -210,7 +213,7 @@ export function OverlayExpanded({
             )}
           </div>
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 cursor-default" onMouseDown={(e) => e.stopPropagation()}>
           <div className="flex items-center gap-1 mr-2">
             {connection === "connected" && <Wifi className="h-3 w-3 text-success" />}
             {connection === "reconnecting" && <Loader2 className="h-3 w-3 text-warning animate-spin" />}
@@ -370,10 +373,10 @@ export function OverlayExpanded({
                     key={key}
                     onClick={() => handleActionClick(key)}
                     disabled={isGenerating}
-                    className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
+                    className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-all disabled:opacity-60 disabled:cursor-not-allowed ${
                       activeAction === key
-                        ? "bg-primary/15 text-primary border-primary/25"
-                        : "border-[var(--glass-border)] text-muted-foreground hover:bg-[var(--glass-hover)] hover:text-foreground hover:border-foreground/10"
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "bg-card text-foreground border-border hover:bg-secondary"
                     }`}
                   >
                     <Icon className="h-3 w-3" />
