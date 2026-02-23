@@ -19,7 +19,7 @@ import {
   Sparkles,
 } from "lucide-react"
 import type { Dict } from "@/lib/i18n"
-import { getActiveSessionId, sendAiQuery } from "@/lib/tauri"
+import { getActiveSessionId, getSettings, sendAiQuery, updateSettings } from "@/lib/tauri"
 import type { OverlayVisualMode } from "@/stores/ui-settings-store"
 import { useSessionStore } from "@/stores/session-store"
 
@@ -83,6 +83,7 @@ export function OverlayExpanded({
   const [messages, setMessages] = useState<LLMMessage[]>([])
   const [isGenerating, setIsGenerating] = useState(false)
   const [activeAction, setActiveAction] = useState<RightPaneAction | null>(null)
+  const [selfSpeakerTags, setSelfSpeakerTags] = useState<string[]>([])
   const captions = useSessionStore((s) => s.captions)
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const captionEndRef = useRef<HTMLDivElement>(null)
@@ -101,6 +102,59 @@ export function OverlayExpanded({
     if (source === "SPK3") return "bg-warning/15 text-warning"
     if (source === "SPK4") return "bg-accent/20 text-accent-foreground"
     return "bg-secondary text-foreground"
+  }
+
+  const normalizeSource = (source: string) => source.trim().toUpperCase()
+  const isSelfSource = (source: string) =>
+    selfSpeakerTags.some((tag) => normalizeSource(tag) === normalizeSource(source))
+  const isTagSelectable = (source: string) =>
+    source === "MIC" || source === "SYS" || source === "SPK" || /^SPK\d+$/.test(source)
+
+  useEffect(() => {
+    let mounted = true
+    const loadSelfTag = async () => {
+      try {
+        const settings = await getSettings()
+        if (!mounted) return
+        const tags =
+          Array.isArray(settings.self_speaker_tags) && settings.self_speaker_tags.length > 0
+            ? settings.self_speaker_tags
+            : settings.self_speaker_tag
+              ? [settings.self_speaker_tag]
+              : []
+        const normalized = tags
+          .map((tag) => normalizeSource(tag))
+          .filter((tag, index, array) => !!tag && array.indexOf(tag) === index)
+        setSelfSpeakerTags(normalized)
+      } catch (error) {
+        console.error("Failed to load self speaker tag setting:", error)
+      }
+    }
+    void loadSelfTag()
+    return () => {
+      mounted = false
+    }
+  }, [])
+
+  const handleSourceTagClick = async (source: string) => {
+    if (!isTagSelectable(source)) return
+    const normalizedSource = normalizeSource(source)
+    const prevTags = selfSpeakerTags
+    const nextTags = isSelfSource(source)
+      ? selfSpeakerTags.filter((tag) => normalizeSource(tag) !== normalizedSource)
+      : [...selfSpeakerTags, normalizedSource].filter(
+          (tag, index, array) => array.indexOf(tag) === index,
+        )
+    setSelfSpeakerTags(nextTags)
+    try {
+      await updateSettings({
+        self_speaker_tags: nextTags,
+        self_speaker_tag: nextTags[0] ?? "",
+      })
+    } catch (error) {
+      console.error("Failed to update self speaker tag setting:", error)
+      setSelfSpeakerTags(prevTags)
+    }
   }
 
   useEffect(() => {
@@ -336,13 +390,25 @@ export function OverlayExpanded({
                   <span className="shrink-0 text-[10px] font-mono text-muted-foreground pt-0.5 leading-5">
                     {entry.time}
                   </span>
-                  <span
-                    className={`shrink-0 rounded px-1 py-0.5 text-[9px] font-bold leading-none mt-1 ${
+                  <button
+                    type="button"
+                    onClick={() => void handleSourceTagClick(entry.source)}
+                    className={`shrink-0 rounded px-1 py-0.5 text-[9px] font-bold leading-none mt-1 transition-all ${
                       sourceBadgeClass(entry.source)
+                    } ${
+                      isTagSelectable(entry.source)
+                        ? "cursor-pointer hover:ring-1 hover:ring-primary/40"
+                        : "cursor-default"
+                    } ${
+                      isSelfSource(entry.source)
+                        ? "ring-1 ring-primary bg-primary/25 text-primary-foreground"
+                        : ""
                     }`}
+                    aria-label={`${entry.source} tag`}
                   >
                     {entry.source}
-                  </span>
+                    {isSelfSource(entry.source) ? " ME" : ""}
+                  </button>
                   <span
                     className={`text-[13px] leading-5 ${
                       entry.status === "interim" ? "text-muted-foreground italic" : "text-foreground"

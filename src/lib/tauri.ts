@@ -197,4 +197,6 @@ export interface AppSettings {
   interim_results: boolean;
   endpointing: number;
   auto_delete: string;
+  self_speaker_tag: string;
+  self_speaker_tags: string[];
 }
