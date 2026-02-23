@@ -51,6 +51,33 @@ pub async fn update_settings(state: State<'_, AppState>, settings: Value) -> Res
     if let Some(v) = settings.get("auto_delete").and_then(|v| v.as_str()) {
         current.auto_delete = v.to_string();
     }
+    if let Some(v) = settings.get("self_speaker_tag").and_then(|v| v.as_str()) {
+        let normalized = v.trim().to_uppercase();
+        current.self_speaker_tag = normalized.clone();
+        current.self_speaker_tags = if normalized.is_empty() {
+            Vec::new()
+        } else {
+            vec![normalized]
+        };
+    }
+    if let Some(values) = settings.get("self_speaker_tags").and_then(|v| v.as_array()) {
+        let mut tags: Vec<String> = Vec::new();
+        for value in values {
+            if let Some(raw) = value.as_str() {
+                let normalized = raw.trim().to_uppercase();
+                if normalized.is_empty() || tags.contains(&normalized) {
+                    continue;
+                }
+                tags.push(normalized);
+            }
+        }
+        current.self_speaker_tags = tags;
+        current.self_speaker_tag = current
+            .self_speaker_tags
+            .first()
+            .cloned()
+            .unwrap_or_default();
+    }
 
     let snapshot = current.clone();
     drop(current);

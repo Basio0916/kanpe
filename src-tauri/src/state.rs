@@ -50,6 +50,8 @@ pub struct AppSettings {
     pub interim_results: bool,
     pub endpointing: u32,
     pub auto_delete: String,
+    pub self_speaker_tag: String,
+    pub self_speaker_tags: Vec<String>,
 }
 
 impl Default for AppSettings {
@@ -68,6 +70,8 @@ impl Default for AppSettings {
             interim_results: true,
             endpointing: 300,
             auto_delete: "30days".to_string(),
+            self_speaker_tag: "".to_string(),
+            self_speaker_tags: Vec::new(),
         }
     }
 }

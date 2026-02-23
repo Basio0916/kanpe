@@ -46,20 +46,21 @@ pub async fn send_ai_query(
         let llm_language = if settings.llm_language.trim().is_empty() {
             "en".to_string()
         } else {
-            settings.llm_language
+            settings.llm_language.clone()
         };
+        let self_speaker_tags = collect_self_speaker_tags(&settings);
 
         let sessions = state.sessions.lock().map_err(|e| e.to_string())?;
         let context = sessions
             .iter()
             .find(|s| s.id == session_id)
-            .map(|s| build_context_from_session(s, action_config.kind))
+            .map(|s| build_context_from_session(s, action_config.kind, &self_speaker_tags))
             .unwrap_or_else(|| "No conversation context available.".to_string());
         (llm_language, context)
     };
 
     let system_prompt = format!(
-        "You are Kanpe, a real-time meeting assistant. Always respond in language code '{}'. Keep answers concise and practical. Output plain text only. Do not use Markdown, headings, bullet markers, or code fences. If the request is unclear, ask one short clarifying question.",
+        "You are Kanpe, a real-time meeting assistant. Always respond in language code '{}'. Keep answers concise and practical. Output plain text only. Do not use Markdown, headings, bullet markers, or code fences. If the request is unclear, ask one short clarifying question. In context lines, role:SELF means the current user, role:OTHER means other speakers.",
         llm_language
     );
 
@@ -264,17 +265,22 @@ fn clamp_text(value: &str, max_chars: usize) -> String {
 fn build_context_from_session(
     session: &crate::state::SessionData,
     action_kind: ActionKind,
+    self_speaker_tags: &[String],
 ) -> String {
     match action_kind {
         ActionKind::Recap | ActionKind::Assist | ActionKind::Question => {
-            build_recent_priority_context(session)
+            build_recent_priority_context(session, self_speaker_tags)
         }
-        ActionKind::Action => build_action_global_context(session),
-        ActionKind::Freeform => build_recent_context(session, 40),
+        ActionKind::Action => build_action_global_context(session, self_speaker_tags),
+        ActionKind::Freeform => build_recent_context(session, 40, self_speaker_tags),
     }
 }
 
-fn build_recent_context(session: &crate::state::SessionData, take: usize) -> String {
+fn build_recent_context(
+    session: &crate::state::SessionData,
+    take: usize,
+    self_speaker_tags: &[String],
+) -> String {
     let captions = select_context_captions(session);
     if captions.is_empty() {
         return "No captions available yet.".to_string();
@@ -287,13 +293,16 @@ fn build_recent_context(session: &crate::state::SessionData, take: usize) -> Str
         .collect::<Vec<_>>()
         .into_iter()
         .rev()
-        .map(format_caption_line)
+        .map(|c| format_caption_line(c, self_speaker_tags))
         .collect::<Vec<_>>()
         .join("\n");
     clamp_text(&recent, MAX_CONTEXT_CHARS)
 }
 
-fn build_recent_priority_context(session: &crate::state::SessionData) -> String {
+fn build_recent_priority_context(
+    session: &crate::state::SessionData,
+    self_speaker_tags: &[String],
+) -> String {
     let captions = select_context_captions(session);
     if captions.is_empty() {
         return "No captions available yet.".to_string();
@@ -301,7 +310,7 @@ fn build_recent_priority_context(session: &crate::state::SessionData) -> String 
 
     let global_sample = sample_evenly(&captions, captions.len().min(16))
         .into_iter()
-        .map(format_caption_line)
+        .map(|c| format_caption_line(c, self_speaker_tags))
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -310,7 +319,7 @@ fn build_recent_priority_context(session: &crate::state::SessionData) -> String 
     let recent_sample = recent_slice
         .iter()
         .copied()
-        .map(format_caption_line)
+        .map(|c| format_caption_line(c, self_speaker_tags))
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -322,7 +331,10 @@ fn build_recent_priority_context(session: &crate::state::SessionData) -> String 
     clamp_text(&combined, MAX_CONTEXT_CHARS)
 }
 
-fn build_action_global_context(session: &crate::state::SessionData) -> String {
+fn build_action_global_context(
+    session: &crate::state::SessionData,
+    self_speaker_tags: &[String],
+) -> String {
     let captions = select_context_captions(session);
     if captions.is_empty() {
         return "No captions available yet.".to_string();
@@ -330,7 +342,7 @@ fn build_action_global_context(session: &crate::state::SessionData) -> String {
 
     let full_timeline_sample = sample_evenly(&captions, captions.len().min(72))
         .into_iter()
-        .map(format_caption_line)
+        .map(|c| format_caption_line(c, self_speaker_tags))
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -339,7 +351,7 @@ fn build_action_global_context(session: &crate::state::SessionData) -> String {
     let recent_sample = recent_slice
         .iter()
         .copied()
-        .map(format_caption_line)
+        .map(|c| format_caption_line(c, self_speaker_tags))
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -382,9 +394,44 @@ fn sample_evenly<'a>(captions: &[&'a CaptionEntry], target: usize) -> Vec<&'a Ca
     sampled
 }
 
-fn format_caption_line(caption: &CaptionEntry) -> String {
+fn normalize_speaker_tag(tag: &str) -> String {
+    tag.trim().to_uppercase()
+}
+
+fn collect_self_speaker_tags(settings: &crate::state::AppSettings) -> Vec<String> {
+    let mut tags: Vec<String> = Vec::new();
+
+    if !settings.self_speaker_tag.trim().is_empty() {
+        tags.push(normalize_speaker_tag(&settings.self_speaker_tag));
+    }
+
+    for tag in &settings.self_speaker_tags {
+        let normalized = normalize_speaker_tag(tag);
+        if normalized.is_empty() || tags.contains(&normalized) {
+            continue;
+        }
+        tags.push(normalized);
+    }
+
+    tags
+}
+
+fn speaker_role_label(source: &str, self_speaker_tags: &[String]) -> &'static str {
+    let normalized_source = normalize_speaker_tag(source);
+    if self_speaker_tags
+        .iter()
+        .any(|tag| !tag.is_empty() && *tag == normalized_source)
+    {
+        "SELF"
+    } else {
+        "OTHER"
+    }
+}
+
+fn format_caption_line(caption: &CaptionEntry, self_speaker_tags: &[String]) -> String {
+    let role = speaker_role_label(&caption.source, self_speaker_tags);
     format!(
-        "[{}][{}][{}] {}",
-        caption.time, caption.source, caption.status, caption.text
+        "[{}][source:{}][role:{}][status:{}] {}",
+        caption.time, caption.source, role, caption.status, caption.text
     )
 }
