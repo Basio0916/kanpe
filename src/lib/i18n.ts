@@ -76,6 +76,7 @@ const en = {
   copyAll: "Copy Full Text",
   export: "Export",
   deleteSession: "Delete Session",
+  deleteSessionFailed: "Failed to delete the session.",
 
   // Settings
   settingsTitle: "Settings",
@@ -287,6 +288,7 @@ const ja: Record<DictKeys, string> = {
   copyAll: "全文コピー",
   export: "エクスポート",
   deleteSession: "セッション削除",
+  deleteSessionFailed: "セッションの削除に失敗しました。",
 
   // Settings
   settingsTitle: "設定",
