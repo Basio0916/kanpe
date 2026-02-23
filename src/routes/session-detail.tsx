@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { ScreenSessionDetail } from "@/components/kanpe/screen-session-detail";
 import { useAppStore } from "@/stores/app-store";
-import { getSession, type SessionDetail } from "@/lib/tauri";
+import { deleteSession, getSession, type SessionDetail } from "@/lib/tauri";
 import { t } from "@/lib/i18n";
 
 export function SessionDetailPage() {
@@ -12,6 +12,7 @@ export function SessionDetailPage() {
   const d = t(locale);
   const [session, setSession] = useState<SessionDetail | null>(null);
   const [loading, setLoading] = useState(true);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -45,12 +46,29 @@ export function SessionDetailPage() {
     };
   }, [id]);
 
+  const handleDeleteSession = async () => {
+    if (!id || deleting) return;
+
+    setDeleting(true);
+    try {
+      await deleteSession(id);
+      navigate("/sessions", { replace: true });
+    } catch (error) {
+      console.error("Failed to delete session:", error);
+      window.alert(d.deleteSessionFailed);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   return (
     <ScreenSessionDetail
       dict={d}
       session={session}
       loading={loading}
+      deleting={deleting}
       onBack={() => navigate("/sessions")}
+      onDeleteSession={() => void handleDeleteSession()}
     />
   );
 }

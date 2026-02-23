@@ -1,7 +1,18 @@
 import { useState } from "react"
-import { ArrowLeft, Share2, Copy, Download, Trash2 } from "lucide-react"
+import { ArrowLeft, Trash2 } from "lucide-react"
 import type { Dict } from "@/lib/i18n"
 import type { SessionDetail } from "@/lib/tauri"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"
 
 type DetailTab = "summary" | "caption" | "ai-log"
 
@@ -9,7 +20,9 @@ interface ScreenSessionDetailProps {
   dict: Dict
   session: SessionDetail | null
   loading: boolean
+  deleting?: boolean
   onBack: () => void
+  onDeleteSession: () => void
 }
 
 function formatCreatedAt(createdAt: string): string {
@@ -22,9 +35,12 @@ export function ScreenSessionDetail({
   dict: d,
   session,
   loading,
+  deleting = false,
   onBack,
+  onDeleteSession,
 }: ScreenSessionDetailProps) {
   const [activeTab, setActiveTab] = useState<DetailTab>("summary")
+  const isJapanese = d.deleteSession === "セッション削除"
 
   const sourceBadgeClass = (source: string) => {
     if (source === "MIC") return "bg-primary/15 text-primary"
@@ -49,20 +65,9 @@ export function ScreenSessionDetail({
     "ai-log": d.aiLog,
   }
 
-  const handleCopyAll = async () => {
-    if (!session) return
-    const allText = session.captions.map((c) => `[${c.time}] ${c.source}: ${c.text}`).join("\n")
-    if (!allText.trim()) return
-    try {
-      await navigator.clipboard.writeText(allText)
-    } catch (error) {
-      console.error("Failed to copy text:", error)
-    }
-  }
-
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+      <div className="flex items-center px-5 py-4 border-b border-border">
         <div className="flex items-center gap-3">
           <button
             onClick={onBack}
@@ -80,12 +85,6 @@ export function ScreenSessionDetail({
             </h1>
           </div>
         </div>
-        <button
-          className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-          aria-label={d.share}
-        >
-          <Share2 className="h-4 w-4" />
-        </button>
       </div>
 
       <div className="flex items-center gap-1 px-5 py-2.5 border-b border-border">
@@ -217,23 +216,42 @@ export function ScreenSessionDetail({
 
       </div>
 
-      <div className="flex items-center gap-2 px-5 py-3 border-t border-border">
-        <button
-          onClick={() => void handleCopyAll()}
-          className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground hover:bg-secondary"
-        >
-          <Copy className="h-3.5 w-3.5" />
-          {d.copyAll}
-        </button>
-        <button className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground hover:bg-secondary">
-          <Download className="h-3.5 w-3.5" />
-          {d.export}
-        </button>
-        <div className="flex-1" />
-        <button className="flex items-center gap-1.5 rounded-lg border border-destructive/30 px-3 py-2 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10">
-          <Trash2 className="h-3.5 w-3.5" />
-          {d.deleteSession}
-        </button>
+      <div className="flex items-center justify-end px-5 py-3 border-t border-border">
+        <AlertDialog>
+          <AlertDialogTrigger asChild>
+            <button
+              disabled={deleting}
+              className="flex items-center gap-1.5 rounded-lg border border-destructive/30 px-3 py-2 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              {d.deleteSession}
+            </button>
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                {isJapanese ? "このセッションを削除しますか？" : "Delete this session?"}
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                {isJapanese
+                  ? "この操作は元に戻せません。セッション内容は完全に削除されます。"
+                  : "This action cannot be undone. The session data will be permanently removed."}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={deleting}>
+                {isJapanese ? "キャンセル" : "Cancel"}
+              </AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() => void onDeleteSession()}
+                disabled={deleting}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              >
+                {isJapanese ? "削除する" : "Delete"}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
     </div>
   )
