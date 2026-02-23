@@ -1,0 +1,12 @@
+import React from "react";
+import ReactDOM from "react-dom/client";
+import OverlayApp from "./OverlayApp";
+import "@fontsource/geist-sans";
+import "@fontsource/geist-mono";
+import "./styles/globals.css";
+
+ReactDOM.createRoot(document.getElementById("root")!).render(
+  <React.StrictMode>
+    <OverlayApp />
+  </React.StrictMode>,
+);
