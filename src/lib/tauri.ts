@@ -19,6 +19,10 @@ export async function resumeRecording(sessionId: string): Promise<void> {
   return invoke("resume_recording", { sessionId });
 }
 
+export async function getActiveSessionId(): Promise<string | null> {
+  return invoke("get_active_session_id");
+}
+
 export async function getSessions(): Promise<Session[]> {
   return invoke("get_sessions");
 }

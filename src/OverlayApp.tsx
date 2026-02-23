@@ -6,7 +6,7 @@ import { useAppStore } from "./stores/app-store";
 import { useSessionStore } from "./stores/session-store";
 import { useUiSettingsStore } from "./stores/ui-settings-store";
 import { useTauriEvents } from "./hooks/use-tauri-events";
-import { pauseRecording, resumeRecording } from "./lib/tauri";
+import { getActiveSessionId, pauseRecording, resumeRecording, stopRecording } from "./lib/tauri";
 import { t } from "./lib/i18n";
 
 const OVERLAY_MINIBAR_SIZE = { width: 460, height: 54 };
@@ -35,12 +35,18 @@ export default function OverlayApp() {
     }
   };
 
-  const handleClose = async () => {
+  const handleStopSession = async () => {
     try {
-      const { getCurrentWindow } = await import("@tauri-apps/api/window");
-      await getCurrentWindow().hide();
-    } catch {
-      // fallback for dev mode
+      const sessionId = activeSessionId ?? (await getActiveSessionId());
+      if (!sessionId) {
+        const { getCurrentWindow } = await import("@tauri-apps/api/window");
+        await getCurrentWindow().hide();
+        return;
+      }
+      await stopRecording(sessionId);
+      useSessionStore.setState({ activeSessionId: null });
+    } catch (error) {
+      console.error("Failed to stop recording:", error);
     }
   };
 
@@ -63,6 +69,21 @@ export default function OverlayApp() {
       delete document.body.dataset.overlay;
       root?.removeAttribute("data-overlay");
     };
+  }, []);
+
+  useEffect(() => {
+    const hydrateActiveSession = async () => {
+      try {
+        const sessionId = await getActiveSessionId();
+        if (sessionId) {
+          useSessionStore.setState({ activeSessionId: sessionId });
+        }
+      } catch {
+        // ignore and rely on runtime events
+      }
+    };
+
+    void hydrateActiveSession();
   }, []);
 
   useEffect(() => {
@@ -113,7 +134,7 @@ export default function OverlayApp() {
         connection={connection}
         onExpand={() => setExpanded(true)}
         onToggleRecording={toggleRecording}
-        onClose={handleClose}
+        onStopSession={handleStopSession}
         onStartDrag={handleStartDrag}
         overlayVisualMode={overlayVisualMode}
       />
@@ -127,7 +148,7 @@ export default function OverlayApp() {
       connection={connection}
       onCollapse={() => setExpanded(false)}
       onToggleRecording={toggleRecording}
-      onClose={handleClose}
+      onStopSession={handleStopSession}
       onStartDrag={handleStartDrag}
       overlayVisualMode={overlayVisualMode}
     />

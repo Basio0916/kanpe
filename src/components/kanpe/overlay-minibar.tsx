@@ -1,5 +1,5 @@
 
-import { Pause, Play, ChevronUp, X, Wifi, WifiOff, Loader2 } from "lucide-react"
+import { Pause, Play, ChevronUp, Square, Wifi, WifiOff, Loader2 } from "lucide-react"
 import type { Dict } from "@/lib/i18n"
 import type { OverlayVisualMode } from "@/stores/ui-settings-store"
 
@@ -13,7 +13,7 @@ interface OverlayMinibarProps {
   overlayVisualMode: OverlayVisualMode
   onExpand: () => void
   onToggleRecording: () => void
-  onClose: () => void
+  onStopSession: () => void
   onStartDrag: () => void
 }
 
@@ -24,7 +24,7 @@ export function OverlayMinibar({
   overlayVisualMode,
   onExpand,
   onToggleRecording,
-  onClose,
+  onStopSession,
   onStartDrag,
 }: OverlayMinibarProps) {
   const surfaceClassName =
@@ -109,11 +109,12 @@ export function OverlayMinibar({
           )}
         </button>
         <button
-          onClick={onClose}
-          className="flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-[var(--glass-hover)] hover:text-foreground"
-          aria-label={d.close}
+          onClick={onStopSession}
+          className="inline-flex h-7 items-center gap-1.5 rounded-lg bg-destructive/15 px-2 text-xs font-medium text-destructive transition-colors hover:bg-destructive/25"
+          aria-label={d.stopRecording}
         >
-          <X className="h-3.5 w-3.5" />
+          <Square className="h-3 w-3 fill-current" />
+          {d.stop}
         </button>
       </div>
     </div>

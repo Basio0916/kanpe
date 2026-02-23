@@ -4,7 +4,7 @@ import {
   ChevronDown,
   Pause,
   Play,
-  X,
+  Square,
   Send,
   Wifi,
   WifiOff,
@@ -19,6 +19,7 @@ import {
   Sparkles,
 } from "lucide-react"
 import type { Dict } from "@/lib/i18n"
+import { getActiveSessionId, sendAiQuery } from "@/lib/tauri"
 import type { OverlayVisualMode } from "@/stores/ui-settings-store"
 import { useSessionStore } from "@/stores/session-store"
 
@@ -37,7 +38,7 @@ interface OverlayExpandedProps {
   permissionMissing?: boolean
   onCollapse: () => void
   onToggleRecording: () => void
-  onClose: () => void
+  onStopSession: () => void
   onStartDrag: () => void
 }
 
@@ -66,17 +67,6 @@ function getActionConfig(d: Dict) {
   } as const
 }
 
-const MOCK_RESPONSES: Record<RightPaneAction, string> = {
-  recap:
-    "[Summary] A project progress report is underway. Frontend is 95% complete (responsive support remaining), backend API integration tests expected by Tuesday. No major blockers reported.",
-  assist:
-    "[Suggestion] \"There are no major blockers. However, we'll need QA team resources during next week's test phase, so I'd appreciate scheduling that in advance.\"",
-  question:
-    "[Question Candidates]\n1. Is the QA phase schedule and assignee confirmed?\n2. Are performance tests planned before release?\n3. When is the staging deployment date?",
-  action:
-    "[Actions]\n1. Complete API integration tests by Tuesday\n2. Finish remaining responsive support tasks\n3. Coordinate test schedule with QA team\n4. Draft staging environment deployment plan",
-}
-
 export function OverlayExpanded({
   dict: d,
   recording,
@@ -85,7 +75,7 @@ export function OverlayExpanded({
   permissionMissing = false,
   onCollapse,
   onToggleRecording,
-  onClose,
+  onStopSession,
   onStartDrag,
 }: OverlayExpandedProps) {
   const ACTION_CONFIG = getActionConfig(d)
@@ -94,6 +84,7 @@ export function OverlayExpanded({
   const [isGenerating, setIsGenerating] = useState(false)
   const [activeAction, setActiveAction] = useState<RightPaneAction | null>(null)
   const captions = useSessionStore((s) => s.captions)
+  const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const captionEndRef = useRef<HTMLDivElement>(null)
   const lastUserMsgRef = useRef<HTMLDivElement>(null)
   const chatScrollContainerRef = useRef<HTMLDivElement>(null)
@@ -126,27 +117,65 @@ export function OverlayExpanded({
     }
   }, [messages])
 
-  const handleActionClick = (action: RightPaneAction) => {
+  const resolveSessionId = async (): Promise<string | null> => {
+    if (activeSessionId) return activeSessionId
+    try {
+      const hydrated = await getActiveSessionId()
+      if (hydrated) {
+        useSessionStore.setState({ activeSessionId: hydrated })
+        return hydrated
+      }
+    } catch {
+      // ignore and fallback to null handling
+    }
+    return null
+  }
+
+  const handleActionClick = async (action: RightPaneAction) => {
+    if (isGenerating) return
     setActiveAction(action)
     const userMsg: LLMMessage = {
       role: "user",
       content: ACTION_CONFIG[action].label,
     }
     setMessages((prev) => [...prev, userMsg])
+    const sessionId = await resolveSessionId()
+    if (!sessionId) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: "セッションが開始されていません。Start Kanpe を押してから再試行してください。",
+        },
+      ])
+      return
+    }
     setIsGenerating(true)
 
-    setTimeout(() => {
+    try {
+      const response = await sendAiQuery(sessionId, ACTION_CONFIG[action].prompt, action)
       const assistantMsg: LLMMessage = {
         role: "assistant",
-        content: MOCK_RESPONSES[action],
+        content: response,
       }
       setMessages((prev) => [...prev, assistantMsg])
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: `LLM呼び出しに失敗しました: ${message}`,
+        },
+      ])
+    } finally {
       setIsGenerating(false)
-    }, 1200)
+    }
   }
 
-  const handleSendFreeform = () => {
+  const handleSendFreeform = async () => {
     if (!inputValue.trim()) return
+    if (isGenerating) return
     const query = inputValue
     const userMsg: LLMMessage = {
       role: "user",
@@ -155,22 +184,44 @@ export function OverlayExpanded({
     setMessages((prev) => [...prev, userMsg])
     setInputValue("")
     setActiveAction(null)
+    const sessionId = await resolveSessionId()
+    if (!sessionId) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: "セッションが開始されていません。Start Kanpe を押してから再試行してください。",
+        },
+      ])
+      return
+    }
     setIsGenerating(true)
 
-    setTimeout(() => {
+    try {
+      const response = await sendAiQuery(sessionId, query)
       const assistantMsg: LLMMessage = {
         role: "assistant",
-        content: `Based on the conversation, here is the answer to "${query}"...`,
+        content: response,
       }
       setMessages((prev) => [...prev, assistantMsg])
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: `LLM呼び出しに失敗しました: ${message}`,
+        },
+      ])
+    } finally {
       setIsGenerating(false)
-    }, 1000)
+    }
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault()
-      handleSendFreeform()
+      void handleSendFreeform()
     }
   }
 
@@ -229,11 +280,12 @@ export function OverlayExpanded({
             <ChevronDown className="h-4 w-4" />
           </button>
           <button
-            onClick={onClose}
-            className="flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-[var(--glass-hover)] hover:text-foreground"
-            aria-label={d.close}
+            onClick={onStopSession}
+            className="inline-flex h-7 items-center gap-1.5 rounded-lg bg-destructive/15 px-2 text-xs font-medium text-destructive transition-colors hover:bg-destructive/25"
+            aria-label={d.stopRecording}
           >
-            <X className="h-3.5 w-3.5" />
+            <Square className="h-3 w-3 fill-current" />
+            {d.stopRecording}
           </button>
         </div>
       </div>
@@ -371,7 +423,7 @@ export function OverlayExpanded({
                 return (
                   <button
                     key={key}
-                    onClick={() => handleActionClick(key)}
+                    onClick={() => void handleActionClick(key)}
                     disabled={isGenerating}
                     className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-all disabled:opacity-60 disabled:cursor-not-allowed ${
                       activeAction === key
@@ -396,7 +448,7 @@ export function OverlayExpanded({
                 className="flex-1 rounded-lg bg-secondary/60 px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground outline-none ring-1 ring-transparent focus:ring-primary/30 transition-shadow disabled:opacity-50"
               />
               <button
-                onClick={handleSendFreeform}
+                onClick={() => void handleSendFreeform()}
                 className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground transition-opacity hover:opacity-80 disabled:opacity-40"
                 disabled={!inputValue.trim() || isGenerating}
                 aria-label={d.send}
