@@ -1,11 +1,15 @@
-import { useState } from "react"
-import { Mic, Monitor, Layers, CheckCircle2, AlertCircle, ExternalLink, RefreshCw } from "lucide-react"
+import { useState, useEffect, useCallback } from "react"
+import { Mic, Monitor, Layers, CheckCircle2, AlertCircle, ExternalLink, RefreshCw, Loader2 } from "lucide-react"
+import { checkPermissions, requestPermission, openSystemSettings } from "@/lib/tauri"
 import type { Dict } from "@/lib/i18n"
+import { getCurrentWindow } from "@tauri-apps/api/window"
 
 type PermissionState = "granted" | "denied" | "unknown"
 
 interface PermissionItem {
   id: string
+  backendKey: "microphone" | "screen_audio" | "overlay"
+  settingsPanel: string
   label: string
   description: string
   icon: React.ReactNode
@@ -19,16 +23,21 @@ interface ScreenOnboardingProps {
 
 export function ScreenOnboarding({ dict: d, onComplete }: ScreenOnboardingProps) {
   const [currentStep, setCurrentStep] = useState(0)
+  const [loading, setLoading] = useState(false)
   const [permissions, setPermissions] = useState<PermissionItem[]>([
     {
       id: "microphone",
+      backendKey: "microphone",
+      settingsPanel: "microphone",
       label: d.micPermissionLabel,
       description: d.micPermissionDesc,
       icon: <Mic className="h-5 w-5" />,
-      state: "granted",
+      state: "unknown",
     },
     {
       id: "screen-audio",
+      backendKey: "screen_audio",
+      settingsPanel: "screen_audio",
       label: d.screenAudioLabel,
       description: d.screenAudioDesc,
       icon: <Monitor className="h-5 w-5" />,
@@ -36,6 +45,8 @@ export function ScreenOnboarding({ dict: d, onComplete }: ScreenOnboardingProps)
     },
     {
       id: "overlay",
+      backendKey: "overlay",
+      settingsPanel: "overlay",
       label: d.overlayLabel,
       description: d.overlayDesc,
       icon: <Layers className="h-5 w-5" />,
@@ -43,10 +54,65 @@ export function ScreenOnboarding({ dict: d, onComplete }: ScreenOnboardingProps)
     },
   ])
 
-  const handleGrant = (id: string) => {
-    setPermissions((prev) =>
-      prev.map((p) => (p.id === id ? { ...p, state: "granted" as PermissionState } : p))
-    )
+  const refreshPermissions = useCallback(async () => {
+    try {
+      const status = await checkPermissions()
+      setPermissions((prev) =>
+        prev.map((p) => ({
+          ...p,
+          state: status[p.backendKey] as PermissionState,
+        }))
+      )
+    } catch (err) {
+      console.error("Failed to check permissions:", err)
+    }
+  }, [])
+
+  // Check permissions on mount
+  useEffect(() => {
+    refreshPermissions()
+  }, [refreshPermissions])
+
+  // Re-check permissions when window regains focus
+  useEffect(() => {
+    const unlisten = getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+      if (focused) {
+        refreshPermissions()
+      }
+    })
+    return () => {
+      unlisten.then((fn) => fn())
+    }
+  }, [refreshPermissions])
+
+  const handleRequest = async (perm: PermissionItem) => {
+    setLoading(true)
+    try {
+      await requestPermission(perm.backendKey)
+      // Re-check all permissions after request
+      await refreshPermissions()
+    } catch (err) {
+      console.error("Failed to request permission:", err)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleOpenSettings = async (perm: PermissionItem) => {
+    try {
+      await openSystemSettings(perm.settingsPanel)
+    } catch (err) {
+      console.error("Failed to open system settings:", err)
+    }
+  }
+
+  const handleRecheck = async () => {
+    setLoading(true)
+    try {
+      await refreshPermissions()
+    } finally {
+      setLoading(false)
+    }
   }
 
   const allGranted = permissions.every((p) => p.state === "granted")
@@ -129,18 +195,27 @@ export function ScreenOnboarding({ dict: d, onComplete }: ScreenOnboardingProps)
                 <div className="flex items-center gap-2">
                   {currentPerm.state !== "granted" && (
                     <button
-                      onClick={() => handleGrant(currentPerm.id)}
-                      className="flex items-center gap-1.5 rounded-lg bg-primary px-3.5 py-2 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90"
+                      onClick={() => handleRequest(currentPerm)}
+                      disabled={loading}
+                      className="flex items-center gap-1.5 rounded-lg bg-primary px-3.5 py-2 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-60"
                     >
+                      {loading && <Loader2 className="h-3 w-3 animate-spin" />}
                       {d.requestPermission}
                     </button>
                   )}
-                  <button className="flex items-center gap-1.5 rounded-lg border border-border px-3.5 py-2 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground hover:bg-secondary">
+                  <button
+                    onClick={() => handleOpenSettings(currentPerm)}
+                    className="flex items-center gap-1.5 rounded-lg border border-border px-3.5 py-2 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground hover:bg-secondary"
+                  >
                     <ExternalLink className="h-3 w-3" />
                     {d.openSystemSettings}
                   </button>
-                  <button className="flex items-center gap-1.5 rounded-lg border border-border px-3.5 py-2 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground hover:bg-secondary">
-                    <RefreshCw className="h-3 w-3" />
+                  <button
+                    onClick={handleRecheck}
+                    disabled={loading}
+                    className="flex items-center gap-1.5 rounded-lg border border-border px-3.5 py-2 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground hover:bg-secondary disabled:opacity-60"
+                  >
+                    <RefreshCw className={`h-3 w-3 ${loading ? "animate-spin" : ""}`} />
                     {d.recheck}
                   </button>
                 </div>
