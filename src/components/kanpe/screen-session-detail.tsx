@@ -1,10 +1,10 @@
-import { useMemo, useState } from "react"
+import { useEffect, useState } from "react"
 import { ArrowLeft, Share2, Copy, Download, Trash2 } from "lucide-react"
 import type { Dict } from "@/lib/i18n"
+import { getSettings } from "@/lib/tauri"
 import type { SessionDetail } from "@/lib/tauri"
 
-type DetailTab = "summary" | "caption" | "ai-log" | "usage"
-type AILogTab = "recap" | "next-speak" | "followup" | "questions" | "freeform"
+type DetailTab = "summary" | "caption" | "ai-log"
 
 interface ScreenSessionDetailProps {
   dict: Dict
@@ -26,51 +26,53 @@ export function ScreenSessionDetail({
   onBack,
 }: ScreenSessionDetailProps) {
   const [activeTab, setActiveTab] = useState<DetailTab>("summary")
-  const [activeAILogTab, setActiveAILogTab] = useState<AILogTab>("recap")
+  const [selfSpeakerTags, setSelfSpeakerTags] = useState<string[]>([])
+
+  const sourceBadgeClass = (source: string) => {
+    if (source === "MIC") return "bg-primary/15 text-primary"
+    if (source === "SYS") return "bg-success/15 text-success"
+    if (source === "SPK1") return "bg-primary/15 text-primary"
+    if (source === "SPK2") return "bg-success/15 text-success"
+    if (source === "SPK3") return "bg-warning/15 text-warning"
+    if (source === "SPK4") return "bg-accent/20 text-accent-foreground"
+    return "bg-secondary text-foreground"
+  }
+
+  const normalizeSource = (source: string) => source.trim().toUpperCase()
+  const isSelfSource = (source: string) =>
+    selfSpeakerTags.some((tag) => normalizeSource(tag) === normalizeSource(source))
+
+  useEffect(() => {
+    let mounted = true
+    const loadSelfSpeakerTags = async () => {
+      try {
+        const settings = await getSettings()
+        if (!mounted) return
+        const tags =
+          Array.isArray(settings.self_speaker_tags) && settings.self_speaker_tags.length > 0
+            ? settings.self_speaker_tags
+            : settings.self_speaker_tag
+              ? [settings.self_speaker_tag]
+              : []
+        const normalized = tags
+          .map((tag) => normalizeSource(tag))
+          .filter((tag, index, array) => !!tag && array.indexOf(tag) === index)
+        setSelfSpeakerTags(normalized)
+      } catch (error) {
+        console.error("Failed to load self speaker tags for session detail:", error)
+      }
+    }
+    void loadSelfSpeakerTags()
+    return () => {
+      mounted = false
+    }
+  }, [])
 
   const TAB_LABELS: Record<DetailTab, string> = {
     summary: d.summary,
     caption: d.caption,
     "ai-log": d.aiLog,
-    usage: d.usage,
   }
-
-  const AI_LOG_TAB_LABELS: Record<AILogTab, string> = {
-    recap: d.recap,
-    "next-speak": d.nextSpeak,
-    followup: d.followup,
-    questions: d.questions,
-    freeform: d.assist,
-  }
-
-  const aiLogTypes = useMemo<AILogTab[]>(() => {
-    const defaults: AILogTab[] = ["recap", "next-speak", "followup", "questions"]
-    if (!session) return defaults
-    const found = new Set<AILogTab>()
-    for (const log of session.ai_logs) {
-      const type = (log.type as AILogTab) || "freeform"
-      if (
-        type === "recap" ||
-        type === "next-speak" ||
-        type === "followup" ||
-        type === "questions" ||
-        type === "freeform"
-      ) {
-        found.add(type)
-      }
-    }
-    if (found.size === 0) return defaults
-    if (found.has("freeform")) {
-      found.add("freeform")
-    }
-    const ordered: AILogTab[] = ["recap", "next-speak", "followup", "questions", "freeform"]
-    return ordered.filter((t) => found.has(t))
-  }, [session])
-
-  const filteredLogs = useMemo(() => {
-    if (!session) return []
-    return session.ai_logs.filter((log) => (log.type as AILogTab) === activeAILogTab)
-  }, [session, activeAILogTab])
 
   const handleCopyAll = async () => {
     if (!session) return
@@ -172,13 +174,14 @@ export function ScreenSessionDetail({
                   {entry.time}
                 </span>
                 <span
-                  className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold ${
-                    entry.source.startsWith("SPK") || entry.source === "MIC"
-                      ? "bg-primary/15 text-primary"
-                      : "bg-success/15 text-success"
+                  className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold ${sourceBadgeClass(
+                    entry.source,
+                  )} ${
+                    isSelfSource(entry.source) ? "ring-1 ring-primary bg-primary/25 text-primary-foreground" : ""
                   }`}
                 >
                   {entry.source}
+                  {isSelfSource(entry.source) ? " ME" : ""}
                 </span>
                 {entry.status === "interim" && (
                   <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px] text-warning bg-warning/10 font-medium">
@@ -198,57 +201,45 @@ export function ScreenSessionDetail({
         )}
 
         {!loading && session && activeTab === "ai-log" && (
-          <div className="flex flex-col">
-            <div className="flex items-center gap-1 px-4 py-2 border-b border-border">
-              {aiLogTypes.map((tab) => (
-                <button
-                  key={tab}
-                  onClick={() => setActiveAILogTab(tab)}
-                  className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
-                    activeAILogTab === tab
-                      ? "bg-secondary text-foreground"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
+          <div className="flex flex-col gap-2.5 p-4">
+            {session.ai_logs.length === 0 && (
+              <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">
+                {d.noData}
+              </div>
+            )}
+            {session.ai_logs.map((log, i) => {
+              const isUser = log.role === "user"
+              return (
+                <div
+                  key={`${log.time}-${i}`}
+                  className={`flex ${isUser ? "justify-end" : "justify-start"}`}
                 >
-                  {AI_LOG_TAB_LABELS[tab]}
-                </button>
-              ))}
-            </div>
-            <div className="flex flex-col gap-2 p-4">
-              {filteredLogs.map((log, i) => (
-                <div key={`${log.time}-${i}`} className="rounded-xl bg-secondary/50 border border-border p-3.5">
-                  <span className="block text-[10px] font-mono text-muted-foreground mb-1.5">
-                    {log.time}
-                  </span>
-                  <p className="text-sm text-foreground leading-relaxed">{log.text}</p>
+                  <div
+                    className={`max-w-[85%] rounded-2xl border px-3 py-2 text-[13px] leading-relaxed ${
+                      isUser
+                        ? "bg-primary text-primary-foreground border-primary rounded-br-md"
+                        : "bg-secondary text-foreground border-border rounded-bl-md"
+                    }`}
+                  >
+                    <span
+                      className={`mb-1 block text-[10px] font-mono ${
+                        isUser ? "text-primary-foreground/80" : "text-muted-foreground"
+                      }`}
+                    >
+                      {log.time} · {isUser ? "You" : "Kanpe"}
+                    </span>
+                    {log.text.split("\n").map((line, lineIndex) => (
+                      <p key={lineIndex} className={lineIndex > 0 ? "mt-1" : ""}>
+                        {line}
+                      </p>
+                    ))}
+                  </div>
                 </div>
-              ))}
-              {filteredLogs.length === 0 && (
-                <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">
-                  {d.noData}
-                </div>
-              )}
-            </div>
+              )
+            })}
           </div>
         )}
 
-        {!loading && session && activeTab === "usage" && (
-          <div className="p-5">
-            <div className="grid grid-cols-2 gap-3">
-              {[
-                { label: d.sttProcessingTime, value: session.stt_processing_time },
-                { label: d.aiInferenceCount, value: String(session.ai_inference_count) },
-                { label: d.audioDataSize, value: session.audio_data_size },
-                { label: d.tokenUsage, value: String(session.token_usage) },
-              ].map((item) => (
-                <div key={item.label} className="rounded-xl bg-secondary/50 border border-border p-4">
-                  <span className="block text-xs text-muted-foreground mb-1">{item.label}</span>
-                  <span className="text-lg font-semibold text-foreground">{item.value}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
       </div>
 
       <div className="flex items-center gap-2 px-5 py-3 border-t border-border">

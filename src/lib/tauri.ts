@@ -174,6 +174,7 @@ export interface SessionDetail {
 export interface AiLogEntry {
   time: string;
   type: "recap" | "next-speak" | "followup" | "questions" | "freeform";
+  role: "user" | "assistant";
   text: string;
 }
 
