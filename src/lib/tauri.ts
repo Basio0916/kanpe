@@ -102,6 +102,12 @@ export type ConnectionEvent = {
   status: "connected" | "reconnecting" | "disconnected";
 };
 
+export type SessionCompletedEvent = {
+  sessionId: string;
+  title: string;
+  summary: string;
+};
+
 export function onCaption(
   handler: (event: CaptionEvent) => void,
 ): Promise<UnlistenFn> {
@@ -128,6 +134,14 @@ export function onConnection(
   return listen<ConnectionEvent>("connection", (e) => handler(e.payload));
 }
 
+export function onSessionCompleted(
+  handler: (event: SessionCompletedEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<SessionCompletedEvent>("session-completed", (e) =>
+    handler(e.payload),
+  );
+}
+
 // ── Types ──
 
 export interface Session {
@@ -143,7 +157,9 @@ export interface SessionDetail {
   id: string;
   title: string;
   duration: string;
+  time: string;
   created_at: string;
+  is_active: boolean;
   captions: CaptionEvent[];
   ai_logs: AiLogEntry[];
   summary: string;
@@ -157,7 +173,7 @@ export interface SessionDetail {
 
 export interface AiLogEntry {
   time: string;
-  type: "recap" | "next-speak" | "followup" | "questions";
+  type: "recap" | "next-speak" | "followup" | "questions" | "freeform";
   text: string;
 }
 

@@ -4,6 +4,7 @@ import { OnboardingPage } from "./routes/onboarding";
 import { SessionsPage } from "./routes/sessions";
 import { SessionDetailPage } from "./routes/session-detail";
 import { useAppStore } from "./stores/app-store";
+import { onSessionCompleted } from "./lib/tauri";
 
 function AppRoutes() {
   const navigate = useNavigate();
@@ -16,6 +17,16 @@ function AppRoutes() {
       navigate("/onboarding", { replace: true });
     }
   }, [onboardingComplete, location.pathname, navigate]);
+
+  useEffect(() => {
+    const unlisten = onSessionCompleted((event) => {
+      navigate(`/sessions/${event.sessionId}`);
+    });
+
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, [navigate]);
 
   return (
     <Routes>
