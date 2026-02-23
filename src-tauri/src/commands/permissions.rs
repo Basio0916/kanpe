@@ -35,10 +35,10 @@ mod macos {
             let status: i64 = msg_send![cls, authorizationStatusForMediaType: audio_type];
 
             match status {
-                0 => "unknown",  // AVAuthorizationStatusNotDetermined
-                1 => "denied",   // AVAuthorizationStatusRestricted
-                2 => "denied",   // AVAuthorizationStatusDenied
-                3 => "granted",  // AVAuthorizationStatusAuthorized
+                0 => "unknown", // AVAuthorizationStatusNotDetermined
+                1 => "denied",  // AVAuthorizationStatusRestricted
+                2 => "denied",  // AVAuthorizationStatusDenied
+                3 => "granted", // AVAuthorizationStatusAuthorized
                 _ => "unknown",
             }
         }
@@ -138,11 +138,10 @@ pub async fn request_permission(kind: String) -> Result<bool, String> {
                 match status {
                     "unknown" => {
                         // Not yet determined — show native dialog (blocking)
-                        let granted = tokio::task::spawn_blocking(|| {
-                            macos::request_microphone_access()
-                        })
-                        .await
-                        .map_err(|e| e.to_string())?;
+                        let granted =
+                            tokio::task::spawn_blocking(|| macos::request_microphone_access())
+                                .await
+                                .map_err(|e| e.to_string())?;
                         Ok(granted)
                     }
                     "denied" => {

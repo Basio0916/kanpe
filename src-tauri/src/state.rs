@@ -1,3 +1,4 @@
+use crate::audio::RecordingRuntime;
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 
@@ -80,6 +81,7 @@ pub struct AppState {
     pub sessions: Mutex<Vec<SessionData>>,
     pub settings: Mutex<AppSettings>,
     pub active_session_id: Mutex<Option<String>>,
+    pub recording_runtime: Mutex<Option<RecordingRuntime>>,
 }
 
 impl AppState {
@@ -88,6 +90,7 @@ impl AppState {
             sessions: Mutex::new(Vec::new()),
             settings: Mutex::new(AppSettings::default()),
             active_session_id: Mutex::new(None),
+            recording_runtime: Mutex::new(None),
         }
     }
 }

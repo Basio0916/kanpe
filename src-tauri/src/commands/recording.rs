@@ -1,13 +1,52 @@
-use crate::state::{AppState, CaptionEntry, SessionData};
+use crate::audio::{emit_connection_status, start_live_caption_runtime, RecordingRuntime};
+use crate::state::{AppState, SessionData};
 use chrono::Local;
 use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
+fn stop_runtime_instance(runtime: RecordingRuntime) {
+    let _ = runtime.stop_tx.send(());
+    for handle in runtime.tasks {
+        handle.abort();
+    }
+}
+
+fn stop_recording_runtime(state: &AppState) -> Result<(), String> {
+    let runtime = {
+        let mut guard = state.recording_runtime.lock().map_err(|e| e.to_string())?;
+        guard.take()
+    };
+    if let Some(runtime) = runtime {
+        stop_runtime_instance(runtime);
+    }
+    Ok(())
+}
+
+fn replace_recording_runtime(state: &AppState, runtime: RecordingRuntime) -> Result<(), String> {
+    let previous = {
+        let mut guard = state.recording_runtime.lock().map_err(|e| e.to_string())?;
+        guard.replace(runtime)
+    };
+    if let Some(previous) = previous {
+        stop_runtime_instance(previous);
+    }
+    Ok(())
+}
+
 #[tauri::command]
-pub async fn start_recording(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<String, String> {
+pub async fn start_recording(app: AppHandle, state: State<'_, AppState>) -> Result<String, String> {
+    stop_recording_runtime(&state)?;
+    let previous_active = {
+        let mut active = state.active_session_id.lock().map_err(|e| e.to_string())?;
+        active.take()
+    };
+    if let Some(previous_session_id) = previous_active {
+        let mut sessions = state.sessions.lock().map_err(|e| e.to_string())?;
+        if let Some(session) = sessions.iter_mut().find(|s| s.id == previous_session_id) {
+            session.is_active = false;
+        }
+    }
+
     let session_id = Uuid::new_v4().to_string();
     let now = Local::now();
 
@@ -30,12 +69,26 @@ pub async fn start_recording(
         sessions.push(session);
     }
     {
-        let mut active = state
-            .active_session_id
-            .lock()
-            .map_err(|e| e.to_string())?;
+        let mut active = state.active_session_id.lock().map_err(|e| e.to_string())?;
         *active = Some(session_id.clone());
     }
+
+    let runtime = match start_live_caption_runtime(app.clone(), session_id.clone()) {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            {
+                let mut sessions = state.sessions.lock().map_err(|e| e.to_string())?;
+                sessions.retain(|s| s.id != session_id);
+            }
+            {
+                let mut active = state.active_session_id.lock().map_err(|e| e.to_string())?;
+                *active = None;
+            }
+            emit_connection_status(&app, "disconnected");
+            return Err(err);
+        }
+    };
+    replace_recording_runtime(&state, runtime)?;
 
     app.emit(
         "recording-state",
@@ -55,6 +108,8 @@ pub async fn stop_recording(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<(), String> {
+    stop_recording_runtime(&state)?;
+
     {
         let mut sessions = state.sessions.lock().map_err(|e| e.to_string())?;
         if let Some(session) = sessions.iter_mut().find(|s| s.id == session_id) {
@@ -62,10 +117,7 @@ pub async fn stop_recording(
         }
     }
     {
-        let mut active = state
-            .active_session_id
-            .lock()
-            .map_err(|e| e.to_string())?;
+        let mut active = state.active_session_id.lock().map_err(|e| e.to_string())?;
         *active = None;
     }
 
@@ -77,6 +129,7 @@ pub async fn stop_recording(
         }),
     )
     .map_err(|e| e.to_string())?;
+    emit_connection_status(&app, "disconnected");
 
     // Hide overlay when recording stops
     if let Some(overlay) = app.get_webview_window("overlay") {
@@ -89,9 +142,11 @@ pub async fn stop_recording(
 #[tauri::command]
 pub async fn pause_recording(
     app: AppHandle,
-    _state: State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
 ) -> Result<(), String> {
+    stop_recording_runtime(&state)?;
+
     app.emit(
         "recording-state",
         serde_json::json!({
@@ -100,6 +155,7 @@ pub async fn pause_recording(
         }),
     )
     .map_err(|e| e.to_string())?;
+    emit_connection_status(&app, "disconnected");
 
     Ok(())
 }
@@ -107,9 +163,12 @@ pub async fn pause_recording(
 #[tauri::command]
 pub async fn resume_recording(
     app: AppHandle,
-    _state: State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
 ) -> Result<(), String> {
+    let runtime = start_live_caption_runtime(app.clone(), session_id.clone())?;
+    replace_recording_runtime(&state, runtime)?;
+
     app.emit(
         "recording-state",
         serde_json::json!({
@@ -120,9 +179,4 @@ pub async fn resume_recording(
     .map_err(|e| e.to_string())?;
 
     Ok(())
-}
-
-// Helper to emit caption events (called from audio pipeline)
-pub fn emit_caption(app: &AppHandle, entry: &CaptionEntry) -> Result<(), String> {
-    app.emit("caption", entry).map_err(|e| e.to_string())
 }

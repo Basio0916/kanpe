@@ -9,10 +9,7 @@ pub async fn get_settings(state: State<'_, AppState>) -> Result<AppSettings, Str
 }
 
 #[tauri::command]
-pub async fn update_settings(
-    state: State<'_, AppState>,
-    settings: Value,
-) -> Result<(), String> {
+pub async fn update_settings(state: State<'_, AppState>, settings: Value) -> Result<(), String> {
     let mut current = state.settings.lock().map_err(|e| e.to_string())?;
 
     if let Some(v) = settings.get("auto_start").and_then(|v| v.as_bool()) {

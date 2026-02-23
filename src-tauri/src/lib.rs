@@ -1,3 +1,4 @@
+pub mod audio;
 pub mod commands;
 pub mod state;
 pub mod window;
@@ -6,6 +7,7 @@ use state::AppState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let _ = dotenvy::dotenv();
     let app_state = AppState::new();
 
     tauri::Builder::default()
