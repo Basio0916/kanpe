@@ -16,6 +16,8 @@ pub struct SessionData {
     pub summary: String,
     pub participants: u32,
     pub ai_assists: u32,
+    #[serde(default)]
+    pub self_speaker_tags: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

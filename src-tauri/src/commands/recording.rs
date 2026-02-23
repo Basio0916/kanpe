@@ -352,6 +352,7 @@ pub async fn start_recording(app: AppHandle, state: State<'_, AppState>) -> Resu
         summary: String::new(),
         participants: 0,
         ai_assists: 0,
+        self_speaker_tags: Vec::new(),
     };
 
     {

@@ -22,6 +22,8 @@ pub fn run() {
             commands::recording::get_active_session_id,
             commands::sessions::get_sessions,
             commands::sessions::get_session,
+            commands::sessions::get_session_self_speaker_tags,
+            commands::sessions::update_session_self_speaker_tags,
             commands::sessions::delete_session,
             commands::sessions::export_session,
             commands::ai::send_ai_query,

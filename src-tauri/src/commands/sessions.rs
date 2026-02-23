@@ -41,11 +41,50 @@ pub async fn get_session(state: State<'_, AppState>, id: String) -> Result<Value
         "summary": session.summary,
         "participants": session.participants,
         "ai_assists": session.ai_assists,
+        "self_speaker_tags": session.self_speaker_tags.clone(),
         "stt_processing_time": session.duration,
         "ai_inference_count": session.ai_assists,
         "audio_data_size": "0 MB",
         "token_usage": 0,
     }))
+}
+
+#[tauri::command]
+pub async fn get_session_self_speaker_tags(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<Vec<String>, String> {
+    let sessions = state.sessions.lock().map_err(|e| e.to_string())?;
+    let session = sessions
+        .iter()
+        .find(|s| s.id == session_id)
+        .ok_or_else(|| "Session not found".to_string())?;
+    Ok(session.self_speaker_tags.clone())
+}
+
+#[tauri::command]
+pub async fn update_session_self_speaker_tags(
+    state: State<'_, AppState>,
+    session_id: String,
+    tags: Vec<String>,
+) -> Result<Vec<String>, String> {
+    let mut normalized: Vec<String> = Vec::new();
+    for raw in tags {
+        let tag = raw.trim().to_uppercase();
+        if tag.is_empty() || normalized.contains(&tag) {
+            continue;
+        }
+        normalized.push(tag);
+    }
+
+    let mut sessions = state.sessions.lock().map_err(|e| e.to_string())?;
+    let session = sessions
+        .iter_mut()
+        .find(|s| s.id == session_id)
+        .ok_or_else(|| "Session not found".to_string())?;
+    session.self_speaker_tags = normalized.clone();
+    save_sessions_to_disk(&sessions)?;
+    Ok(normalized)
 }
 
 #[tauri::command]

@@ -42,22 +42,23 @@ pub async fn send_ai_query(
     let action_config = action_config(action_key.as_deref());
     let user_log_text = user_input_log_text(action_key.as_deref(), trimmed_query);
 
-    let (llm_language, conversation_context) = {
-        let settings = state.settings.lock().map_err(|e| e.to_string())?.clone();
-        let llm_language = if settings.llm_language.trim().is_empty() {
+    let llm_language = {
+        let settings = state.settings.lock().map_err(|e| e.to_string())?;
+        if settings.llm_language.trim().is_empty() {
             "en".to_string()
         } else {
             settings.llm_language.clone()
-        };
-        let self_speaker_tags = collect_self_speaker_tags(&settings);
+        }
+    };
 
+    let conversation_context = {
         let sessions = state.sessions.lock().map_err(|e| e.to_string())?;
-        let context = sessions
-            .iter()
-            .find(|s| s.id == session_id)
-            .map(|s| build_context_from_session(s, action_config.kind, &self_speaker_tags))
-            .unwrap_or_else(|| "No conversation context available.".to_string());
-        (llm_language, context)
+        if let Some(session) = sessions.iter().find(|s| s.id == session_id) {
+            let self_speaker_tags = collect_session_self_speaker_tags(session);
+            build_context_from_session(session, action_config.kind, &self_speaker_tags)
+        } else {
+            "No conversation context available.".to_string()
+        }
     };
 
     let system_prompt = format!(
@@ -418,14 +419,9 @@ fn normalize_speaker_tag(tag: &str) -> String {
     tag.trim().to_uppercase()
 }
 
-fn collect_self_speaker_tags(settings: &crate::state::AppSettings) -> Vec<String> {
+fn collect_session_self_speaker_tags(session: &crate::state::SessionData) -> Vec<String> {
     let mut tags: Vec<String> = Vec::new();
-
-    if !settings.self_speaker_tag.trim().is_empty() {
-        tags.push(normalize_speaker_tag(&settings.self_speaker_tag));
-    }
-
-    for tag in &settings.self_speaker_tags {
+    for tag in &session.self_speaker_tags {
         let normalized = normalize_speaker_tag(tag);
         if normalized.is_empty() || tags.contains(&normalized) {
             continue;
