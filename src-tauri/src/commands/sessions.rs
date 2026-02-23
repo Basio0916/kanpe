@@ -1,4 +1,4 @@
-use crate::state::AppState;
+use crate::state::{save_sessions_to_disk, AppState};
 use serde_json::Value;
 use tauri::State;
 
@@ -33,7 +33,9 @@ pub async fn get_session(state: State<'_, AppState>, id: String) -> Result<Value
         "id": session.id,
         "title": session.title,
         "duration": session.duration,
+        "time": session.time,
         "created_at": session.created_at,
+        "is_active": session.is_active,
         "captions": session.captions,
         "ai_logs": session.ai_logs,
         "summary": session.summary,
@@ -50,6 +52,7 @@ pub async fn get_session(state: State<'_, AppState>, id: String) -> Result<Value
 pub async fn delete_session(state: State<'_, AppState>, id: String) -> Result<(), String> {
     let mut sessions = state.sessions.lock().map_err(|e| e.to_string())?;
     sessions.retain(|s| s.id != id);
+    save_sessions_to_disk(&sessions)?;
     Ok(())
 }
 

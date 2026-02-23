@@ -73,7 +73,7 @@ impl Default for AppSettings {
 }
 
 impl AppSettings {
-    fn settings_dir() -> Result<PathBuf, String> {
+    pub(crate) fn settings_dir() -> Result<PathBuf, String> {
         let base = dirs::config_dir()
             .ok_or_else(|| "設定ディレクトリを取得できませんでした".to_string())?;
         Ok(base.join("kanpe"))
@@ -128,6 +128,54 @@ impl AppSettings {
     }
 }
 
+fn sessions_path() -> Result<PathBuf, String> {
+    Ok(AppSettings::settings_dir()?.join("sessions.json"))
+}
+
+pub fn load_sessions_from_disk() -> Result<Option<Vec<SessionData>>, String> {
+    let path = sessions_path()?;
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let raw = std::fs::read_to_string(&path).map_err(|e| {
+        format!(
+            "セッションファイルの読み込みに失敗しました ({}): {}",
+            path.display(),
+            e
+        )
+    })?;
+    let parsed = serde_json::from_str::<Vec<SessionData>>(&raw).map_err(|e| {
+        format!(
+            "セッションファイルの解析に失敗しました ({}): {}",
+            path.display(),
+            e
+        )
+    })?;
+    Ok(Some(parsed))
+}
+
+pub fn save_sessions_to_disk(sessions: &[SessionData]) -> Result<(), String> {
+    let dir = AppSettings::settings_dir()?;
+    std::fs::create_dir_all(&dir).map_err(|e| {
+        format!(
+            "設定ディレクトリの作成に失敗しました ({}): {}",
+            dir.display(),
+            e
+        )
+    })?;
+
+    let path = dir.join("sessions.json");
+    let raw = serde_json::to_string_pretty(sessions).map_err(|e| e.to_string())?;
+    std::fs::write(&path, raw).map_err(|e| {
+        format!(
+            "セッションファイルの保存に失敗しました ({}): {}",
+            path.display(),
+            e
+        )
+    })
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PermissionStatus {
     pub microphone: String,
@@ -155,9 +203,23 @@ impl AppState {
                 AppSettings::default()
             }
         };
+        let mut sessions = match load_sessions_from_disk() {
+            Ok(Some(saved)) => saved,
+            Ok(None) => Vec::new(),
+            Err(err) => {
+                log::warn!(
+                    "Failed to load session history. Starting with empty list: {}",
+                    err
+                );
+                Vec::new()
+            }
+        };
+        for session in &mut sessions {
+            session.is_active = false;
+        }
 
         Self {
-            sessions: Mutex::new(Vec::new()),
+            sessions: Mutex::new(sessions),
             settings: Mutex::new(settings),
             active_session_id: Mutex::new(None),
             recording_runtime: Mutex::new(None),

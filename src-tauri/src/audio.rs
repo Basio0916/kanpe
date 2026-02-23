@@ -1,4 +1,4 @@
-use crate::state::{AppSettings, AppState, CaptionEntry};
+use crate::state::{save_sessions_to_disk, AppSettings, AppState, CaptionEntry};
 use chrono::Local;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, Sample, SampleFormat, Stream, StreamConfig};
@@ -1254,6 +1254,9 @@ fn append_and_emit_caption(
                 }
             } else {
                 session.captions.push(entry.clone());
+            }
+            if status == "final" {
+                save_sessions_to_disk(&sessions)?;
             }
         }
     }

@@ -70,11 +70,13 @@ impl LlmProvider {
 pub struct LlmRequest {
     pub system_prompt: String,
     pub user_prompt: String,
+    pub max_output_tokens: Option<u32>,
 }
 
 pub async fn generate_reply(request: LlmRequest) -> Result<String, String> {
     let provider = LlmProvider::from_env()?;
     let api_key = provider.resolve_api_key()?;
+    let max_output_tokens = request.max_output_tokens.unwrap_or(900);
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
@@ -89,6 +91,7 @@ pub async fn generate_reply(request: LlmRequest) -> Result<String, String> {
                 provider.model(),
                 &request.system_prompt,
                 &request.user_prompt,
+                max_output_tokens,
             )
             .await
         }
@@ -99,6 +102,7 @@ pub async fn generate_reply(request: LlmRequest) -> Result<String, String> {
                 provider.model(),
                 &request.system_prompt,
                 &request.user_prompt,
+                max_output_tokens,
             )
             .await
         }
@@ -111,6 +115,7 @@ async fn call_openai(
     model: &str,
     system_prompt: &str,
     user_prompt: &str,
+    max_output_tokens: u32,
 ) -> Result<String, String> {
     let body = json!({
         "model": model,
@@ -134,7 +139,7 @@ async fn call_openai(
                 ]
             }
         ],
-        "max_output_tokens": 900
+        "max_output_tokens": max_output_tokens
     });
 
     let response = client
@@ -176,10 +181,11 @@ async fn call_anthropic(
     model: &str,
     system_prompt: &str,
     user_prompt: &str,
+    max_output_tokens: u32,
 ) -> Result<String, String> {
     let body = json!({
         "model": model,
-        "max_tokens": 900,
+        "max_tokens": max_output_tokens,
         "system": system_prompt,
         "messages": [
             {
