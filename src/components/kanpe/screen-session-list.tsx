@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react"
-import { Search, MoreHorizontal, Mic } from "lucide-react"
+import { Search, Mic } from "lucide-react"
 import type { Dict } from "@/lib/i18n"
 import type { Session } from "@/lib/tauri"
 
@@ -157,21 +157,9 @@ export function ScreenSessionList({
                   <span className="text-xs text-muted-foreground font-mono tabular-nums w-12 text-right">
                     {session.duration}
                   </span>
-                  {hoveredId === session.id ? (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation()
-                      }}
-                      className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-                      aria-label="More options"
-                    >
-                      <MoreHorizontal className="h-4 w-4" />
-                    </button>
-                  ) : (
-                    <span className="text-xs text-muted-foreground w-16 text-right">
-                      {session.time}
-                    </span>
-                  )}
+                  <span className="text-xs text-muted-foreground w-16 text-right">
+                    {session.time}
+                  </span>
                 </div>
               </button>
             ))}
