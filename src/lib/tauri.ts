@@ -79,7 +79,7 @@ export async function hideOverlay(): Promise<void> {
 
 export type CaptionEvent = {
   time: string;
-  source: "MIC" | "SYS";
+  source: string;
   status: "interim" | "final";
   text: string;
 };

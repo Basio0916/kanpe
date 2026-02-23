@@ -17,7 +17,18 @@ export const useSessionStore = create<SessionState>((set) => ({
   captions: [],
   setSessions: (sessions) => set({ sessions }),
   addCaption: (caption) =>
-    set((state) => ({ captions: [...state.captions, caption] })),
+    set((state) => {
+      const captions = [...state.captions];
+      const hasInterimTail =
+        captions.length > 0 &&
+        captions[captions.length - 1].status === "interim";
+      if (hasInterimTail) {
+        captions[captions.length - 1] = caption;
+      } else {
+        captions.push(caption);
+      }
+      return { captions };
+    }),
   addAiResponse: (_response) => {
     // AI responses are handled by components directly
   },
