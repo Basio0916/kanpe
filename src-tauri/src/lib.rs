@@ -1,5 +1,6 @@
 pub mod audio;
 pub mod commands;
+pub mod llm;
 pub mod state;
 pub mod window;
 
@@ -18,6 +19,7 @@ pub fn run() {
             commands::recording::stop_recording,
             commands::recording::pause_recording,
             commands::recording::resume_recording,
+            commands::recording::get_active_session_id,
             commands::sessions::get_sessions,
             commands::sessions::get_session,
             commands::sessions::delete_session,

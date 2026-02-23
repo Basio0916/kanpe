@@ -180,3 +180,9 @@ pub async fn resume_recording(
 
     Ok(())
 }
+
+#[tauri::command]
+pub async fn get_active_session_id(state: State<'_, AppState>) -> Result<Option<String>, String> {
+    let active = state.active_session_id.lock().map_err(|e| e.to_string())?;
+    Ok(active.clone())
+}
