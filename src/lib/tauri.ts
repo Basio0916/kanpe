@@ -210,6 +210,7 @@ export interface AppSettings {
   noise_suppression: boolean;
   stt_model: string;
   interim_results: boolean;
+  utterance_end_ms: number;
   endpointing: number;
   auto_delete: string;
   self_speaker_tag: string;

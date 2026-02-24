@@ -431,14 +431,35 @@ async fn run_mixed_stream(
         settings.stt_language.clone()
     };
 
-    let ws_url = format!(
-        "wss://api.deepgram.com/v1/listen?encoding=linear16&channels=1&sample_rate={}&model={}&language={}&interim_results={}&endpointing={}&diarize=true&punctuate=true&smart_format=true&no_delay=true",
-        MIX_SAMPLE_RATE,
-        settings.stt_model,
-        language,
-        settings.interim_results,
-        settings.endpointing
-    );
+    let model = if settings.stt_model.trim().is_empty() {
+        "nova-3".to_string()
+    } else {
+        settings.stt_model.clone()
+    };
+    let interim_results = false;
+    let utterance_end_ms = effective_utterance_end_ms(&settings);
+
+    let mut query_params = vec![
+        "encoding=linear16".to_string(),
+        "channels=1".to_string(),
+        format!("sample_rate={}", MIX_SAMPLE_RATE),
+        format!("model={}", model),
+        format!("language={}", language),
+        format!("interim_results={}", interim_results),
+        "diarize=true".to_string(),
+        "punctuate=true".to_string(),
+        "smart_format=false".to_string(),
+    ];
+
+    if interim_results {
+        query_params.push(format!("utterance_end_ms={}", utterance_end_ms));
+    }
+
+    if let Some(endpointing_ms) = effective_endpointing_ms(&settings) {
+        query_params.push(format!("endpointing={}", endpointing_ms));
+    }
+
+    let ws_url = format!("wss://api.deepgram.com/v1/listen?{}", query_params.join("&"));
 
     let mut request = match ws_url.into_client_request() {
         Ok(request) => request,
@@ -1140,6 +1161,26 @@ fn detect_dominant_source(mic_db_avg: f64, sys_db_avg: f64) -> DominantSource {
     } else {
         DominantSource::Balanced
     }
+}
+
+fn effective_utterance_end_ms(settings: &AppSettings) -> u32 {
+    if settings.utterance_end_ms == 0 {
+        return 1_000;
+    }
+    settings.utterance_end_ms.clamp(1_000, 5_000)
+}
+
+fn effective_endpointing_ms(settings: &AppSettings) -> Option<u32> {
+    if settings.endpointing == 0 {
+        return None;
+    }
+
+    if settings.endpointing == 300 {
+        log::info!("endpointing=300 is treated as legacy default and disabled");
+        return None;
+    }
+
+    Some(settings.endpointing.clamp(10, 5_000))
 }
 
 fn frames_to_ms(frames: usize) -> usize {

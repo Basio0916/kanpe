@@ -45,6 +45,9 @@ pub async fn update_settings(state: State<'_, AppState>, settings: Value) -> Res
     if let Some(v) = settings.get("interim_results").and_then(|v| v.as_bool()) {
         current.interim_results = v;
     }
+    if let Some(v) = settings.get("utterance_end_ms").and_then(|v| v.as_u64()) {
+        current.utterance_end_ms = v as u32;
+    }
     if let Some(v) = settings.get("endpointing").and_then(|v| v.as_u64()) {
         current.endpointing = v as u32;
     }
