@@ -24,6 +24,9 @@ pub async fn update_settings(state: State<'_, AppState>, settings: Value) -> Res
     if let Some(v) = settings.get("locale").and_then(|v| v.as_str()) {
         current.locale = v.to_string();
     }
+    if let Some(v) = settings.get("stt_provider").and_then(|v| v.as_str()) {
+        current.stt_provider = v.to_string();
+    }
     if let Some(v) = settings.get("stt_language").and_then(|v| v.as_str()) {
         current.stt_language = v.to_string();
     }

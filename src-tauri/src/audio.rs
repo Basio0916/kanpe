@@ -2,21 +2,18 @@ use crate::state::{save_sessions_to_disk, AppSettings, AppState, CaptionEntry};
 use chrono::Local;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, Sample, SampleFormat, Stream, StreamConfig};
-use futures_util::{SinkExt, StreamExt};
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::task::JoinHandle;
-use tokio_tungstenite::connect_async;
-use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_tungstenite::tungstenite::protocol::Message;
 
 #[cfg(target_os = "macos")]
 const SYS_AUDIO_CAPTURE_SWIFT: &str = include_str!("../scripts/sys_audio_capture.swift");
+const FASTER_WHISPER_STREAM_PY: &str = include_str!("../scripts/faster_whisper_stream.py");
 
 const SCREEN_CAPTURE_SAMPLE_RATE: u32 = 16_000;
 const MIX_SAMPLE_RATE: u32 = 16_000;
@@ -24,13 +21,13 @@ const MIX_CHUNK_FRAMES: usize = 320;
 const MAX_QUEUE_DRAIN_CHUNKS: usize = 32;
 const MAX_MIX_BACKLOG_MS: usize = 1_200;
 const MAX_MIX_BACKLOG_FRAMES: usize = (MIX_SAMPLE_RATE as usize * MAX_MIX_BACKLOG_MS) / 1_000;
-const KEEP_ALIVE_INTERVAL_SECS: u64 = 3;
-const KEEP_ALIVE_PAYLOAD: &str = r#"{"type":"KeepAlive"}"#;
-const FINALIZE_PAYLOAD: &str = r#"{"type":"Finalize"}"#;
-const LATENCY_WARN_THRESHOLD_MS: f64 = 1_500.0;
-const LATENCY_WARN_STEP_MS: f64 = 500.0;
 const MIX_DIAGNOSTIC_LOG_INTERVAL_SECS: u64 = 1;
 const DBFS_FLOOR: f64 = -120.0;
+const DEFAULT_STT_PROVIDER: &str = "faster-whisper";
+const DEFAULT_FASTER_WHISPER_MODEL: &str = "small";
+const DEFAULT_FASTER_WHISPER_LANGUAGE: &str = "en";
+const DEFAULT_STT_SOURCE: &str = "SPK";
+const FASTER_WHISPER_STARTUP_TIMEOUT_SECS: u64 = 180;
 
 pub struct RecordingRuntime {
     pub stop_tx: broadcast::Sender<()>,
@@ -65,40 +62,105 @@ enum CaptureHandle {
     },
 }
 
-#[derive(Default)]
-struct StreamLatencyMonitor {
-    last_warn_bucket: Option<u64>,
-    latest_lag_ms: Option<f64>,
+#[derive(Clone, Copy)]
+enum SttProvider {
+    FasterWhisper,
 }
 
-impl StreamLatencyMonitor {
-    fn observe(&mut self, audio_cursor_seconds: f64, transcript_cursor_seconds: Option<f64>) {
-        let Some(transcript_cursor_seconds) = transcript_cursor_seconds else {
-            return;
+impl SttProvider {
+    fn from_settings(settings: &AppSettings) -> Result<Self, String> {
+        let raw = if settings.stt_provider.trim().is_empty() {
+            DEFAULT_STT_PROVIDER
+        } else {
+            settings.stt_provider.trim()
         };
-
-        let lag_ms = ((audio_cursor_seconds - transcript_cursor_seconds) * 1_000.0).max(0.0);
-        self.latest_lag_ms = Some(lag_ms);
-        if lag_ms < LATENCY_WARN_THRESHOLD_MS {
-            self.last_warn_bucket = None;
-            return;
+        let normalized = raw.to_ascii_lowercase().replace('_', "-");
+        match normalized.as_str() {
+            "faster-whisper" => Ok(Self::FasterWhisper),
+            _ => Err(format!(
+                "Unsupported STT provider '{}'. Supported providers: faster-whisper",
+                raw
+            )),
         }
+    }
 
-        let bucket = (lag_ms / LATENCY_WARN_STEP_MS).floor() as u64;
-        if self.last_warn_bucket == Some(bucket) {
-            return;
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::FasterWhisper => "faster-whisper",
         }
-        self.last_warn_bucket = Some(bucket);
-        log::warn!(
-            "Deepgram lag detected: {:.0}ms (audio_cursor={:.2}s, transcript_cursor={:.2}s)",
-            lag_ms,
-            audio_cursor_seconds,
-            transcript_cursor_seconds
-        );
+    }
+}
+
+enum SttRuntimeHandle {
+    FasterWhisper {
+        child: Child,
+        stdin_task: JoinHandle<()>,
+        stdout_task: JoinHandle<()>,
+        stderr_task: JoinHandle<()>,
+    },
+}
+
+struct SttRuntime {
+    provider: SttProvider,
+    audio_tx: mpsc::UnboundedSender<Vec<i16>>,
+    handle: SttRuntimeHandle,
+}
+
+async fn shutdown_failed_faster_whisper_startup(
+    mut child: Child,
+    stdin_task: JoinHandle<()>,
+    stdout_task: JoinHandle<()>,
+    stderr_task: JoinHandle<()>,
+    audio_tx: mpsc::UnboundedSender<Vec<i16>>,
+) {
+    drop(audio_tx);
+    let _ = tokio::time::timeout(Duration::from_secs(1), stdin_task).await;
+    let child_exited = tokio::time::timeout(Duration::from_secs(2), child.wait())
+        .await
+        .is_ok();
+    if !child_exited {
+        let _ = child.start_kill();
+        let _ = child.wait().await;
+    }
+    stdout_task.abort();
+    stderr_task.abort();
+}
+
+impl SttRuntime {
+    fn send_audio(&self, samples: Vec<i16>) -> Result<(), String> {
+        self.audio_tx.send(samples).map_err(|_| {
+            format!(
+                "{} transcription runtime is no longer available",
+                self.provider.as_str()
+            )
+        })
     }
 
     fn latest_lag_ms(&self) -> Option<f64> {
-        self.latest_lag_ms
+        None
+    }
+
+    async fn shutdown(self) {
+        drop(self.audio_tx);
+        match self.handle {
+            SttRuntimeHandle::FasterWhisper {
+                mut child,
+                stdin_task,
+                stdout_task,
+                stderr_task,
+            } => {
+                let _ = tokio::time::timeout(Duration::from_secs(1), stdin_task).await;
+                let child_exited = tokio::time::timeout(Duration::from_secs(2), child.wait())
+                    .await
+                    .is_ok();
+                if !child_exited {
+                    let _ = child.start_kill();
+                    let _ = child.wait().await;
+                }
+                let _ = tokio::time::timeout(Duration::from_secs(1), stdout_task).await;
+                stderr_task.abort();
+            }
+        }
     }
 }
 
@@ -158,7 +220,7 @@ impl MixDiagnostics {
         &mut self,
         mic_buffer_frames: usize,
         sys_buffer_frames: usize,
-        deepgram_lag_ms: Option<f64>,
+        stt_lag_ms: Option<f64>,
     ) {
         if self.window_start.elapsed() < Duration::from_secs(MIX_DIAGNOSTIC_LOG_INTERVAL_SECS) {
             return;
@@ -187,12 +249,12 @@ impl MixDiagnostics {
             self.last_dominant = dominant;
         }
 
-        let lag_text = deepgram_lag_ms
+        let lag_text = stt_lag_ms
             .map(|v| format!("{:.0}", v))
             .unwrap_or_else(|| "n/a".to_string());
 
         log::info!(
-            "Mix diag: mic_avg={:.1}dBFS sys_avg={:.1}dBFS dominant={} mic_buf={}ms sys_buf={}ms dg_lag={}ms mic_samples={} sys_samples={}",
+            "Mix diag: mic_avg={:.1}dBFS sys_avg={:.1}dBFS dominant={} mic_buf={}ms sys_buf={}ms stt_lag={}ms mic_samples={} sys_samples={}",
             mic_db_avg,
             sys_db_avg,
             dominant.as_str(),
@@ -215,9 +277,6 @@ pub fn start_live_caption_runtime(
     app: AppHandle,
     session_id: String,
 ) -> Result<RecordingRuntime, String> {
-    let deepgram_api_key = std::env::var("DEEPGRAM_API_KEY")
-        .map_err(|_| "環境変数 DEEPGRAM_API_KEY が未設定です".to_string())?;
-
     let settings = {
         let state = app.state::<AppState>();
         let guard = state.settings.lock().map_err(|e| e.to_string())?;
@@ -277,7 +336,6 @@ pub fn start_live_caption_runtime(
     let app_clone = app.clone();
     let session_id_clone = session_id;
     let settings_clone = settings;
-    let key_clone = deepgram_api_key;
     let stop_rx = stop_tx.subscribe();
 
     let handle = tokio::task::spawn_blocking(move || {
@@ -295,7 +353,6 @@ pub fn start_live_caption_runtime(
                 app_clone.clone(),
                 session_id_clone,
                 sources,
-                key_clone,
                 settings_clone,
                 stop_rx,
             )
@@ -396,11 +453,192 @@ fn select_microphone_device(
     Some((device, name))
 }
 
+async fn start_stt_runtime(
+    app: AppHandle,
+    session_id: String,
+    settings: &AppSettings,
+) -> Result<SttRuntime, String> {
+    match SttProvider::from_settings(settings)? {
+        SttProvider::FasterWhisper => {
+            let script_path = write_faster_whisper_stream_script()?;
+            let model = effective_stt_model(settings);
+            let language = effective_stt_language(settings);
+            let python_bin = std::env::var("WHISPER_PYTHON_BIN")
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+                .unwrap_or_else(|| "python3".to_string());
+            let chunk_ms = effective_chunk_ms(settings).to_string();
+
+            let mut child = Command::new(&python_bin)
+                .arg("-u")
+                .arg(script_path)
+                .arg("--sample-rate")
+                .arg(MIX_SAMPLE_RATE.to_string())
+                .arg("--model")
+                .arg(model)
+                .arg("--language")
+                .arg(language)
+                .arg("--chunk-ms")
+                .arg(chunk_ms)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .map_err(|e| {
+                    format!(
+                        "Failed to start faster-whisper helper via '{}': {}",
+                        python_bin, e
+                    )
+                })?;
+
+            let stdin = child
+                .stdin
+                .take()
+                .ok_or_else(|| "faster-whisper helper stdin is unavailable".to_string())?;
+            let stdout = child
+                .stdout
+                .take()
+                .ok_or_else(|| "faster-whisper helper stdout is unavailable".to_string())?;
+            let stderr = child
+                .stderr
+                .take()
+                .ok_or_else(|| "faster-whisper helper stderr is unavailable".to_string())?;
+
+            let (audio_tx, mut audio_rx) = mpsc::unbounded_channel::<Vec<i16>>();
+            let (startup_tx, startup_rx) = oneshot::channel::<Result<(), String>>();
+            let stdin_task = tokio::spawn(async move {
+                let mut writer = stdin;
+                while let Some(chunk) = audio_rx.recv().await {
+                    if chunk.is_empty() {
+                        continue;
+                    }
+                    let bytes = pcm_i16_to_le_bytes(&chunk);
+                    if writer.write_all(&bytes).await.is_err() {
+                        break;
+                    }
+                }
+                let _ = writer.shutdown().await;
+            });
+
+            let app_for_stdout = app.clone();
+            let session_for_stdout = session_id.clone();
+            let stdout_task = tokio::spawn(async move {
+                let mut startup_tx = Some(startup_tx);
+                let mut lines = BufReader::new(stdout).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+
+                    let value: serde_json::Value = match serde_json::from_str(&line) {
+                        Ok(v) => v,
+                        Err(err) => {
+                            log::warn!("faster-whisper stdout parse error: {}", err);
+                            continue;
+                        }
+                    };
+
+                    let event_type = value
+                        .get("type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default();
+
+                    if event_type == "ready" {
+                        if let Some(tx) = startup_tx.take() {
+                            let _ = tx.send(Ok(()));
+                        }
+                        continue;
+                    }
+
+                    if event_type == "error" {
+                        let message = value
+                            .get("message")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown faster-whisper error")
+                            .to_string();
+                        if let Some(tx) = startup_tx.take() {
+                            let _ = tx.send(Err(message.clone()));
+                        }
+                        log::error!("faster-whisper helper error: {}", message);
+                        return;
+                    }
+
+                    if let Err(err) = handle_faster_whisper_stdout_value(
+                        &app_for_stdout,
+                        &session_for_stdout,
+                        &value,
+                    ) {
+                        log::warn!("faster-whisper stdout parse error: {}", err);
+                    }
+                }
+
+                if let Some(tx) = startup_tx.take() {
+                    let _ = tx.send(Err(
+                        "faster-whisper helper terminated before signaling readiness".to_string(),
+                    ));
+                }
+            });
+
+            let stderr_task = tokio::spawn(async move {
+                let mut lines = BufReader::new(stderr).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    log::info!("faster-whisper: {}", line);
+                }
+            });
+
+            let startup_result = match tokio::time::timeout(
+                Duration::from_secs(FASTER_WHISPER_STARTUP_TIMEOUT_SECS),
+                startup_rx,
+            )
+            .await
+            {
+                Ok(Ok(Ok(()))) => Ok(()),
+                Ok(Ok(Err(err))) => Err(format!(
+                    "faster-whisper helper initialization failed: {}",
+                    err
+                )),
+                Ok(Err(_)) => Err(
+                    "faster-whisper helper terminated before initialization completed".to_string(),
+                ),
+                Err(_) => Err(format!(
+                    "timed out waiting for faster-whisper helper initialization ({}s)",
+                    FASTER_WHISPER_STARTUP_TIMEOUT_SECS
+                )),
+            };
+
+            if let Err(err) = startup_result {
+                shutdown_failed_faster_whisper_startup(
+                    child,
+                    stdin_task,
+                    stdout_task,
+                    stderr_task,
+                    audio_tx,
+                )
+                .await;
+                return Err(err);
+            }
+
+            Ok(SttRuntime {
+                provider: SttProvider::FasterWhisper,
+                audio_tx,
+                handle: SttRuntimeHandle::FasterWhisper {
+                    child,
+                    stdin_task,
+                    stdout_task,
+                    stderr_task,
+                },
+            })
+        }
+    }
+}
+
 async fn run_mixed_stream(
     app: AppHandle,
     session_id: String,
     sources: Vec<SourceSpec>,
-    deepgram_api_key: String,
     settings: AppSettings,
     mut stop_rx: broadcast::Receiver<()>,
 ) -> Result<(), String> {
@@ -425,72 +663,19 @@ async fn run_mixed_stream(
         );
     }
 
-    let language = if settings.stt_language.trim().is_empty() {
-        "en".to_string()
-    } else {
-        settings.stt_language.clone()
-    };
-
-    let model = if settings.stt_model.trim().is_empty() {
-        "nova-3".to_string()
-    } else {
-        settings.stt_model.clone()
-    };
-    let interim_results = false;
-    let utterance_end_ms = effective_utterance_end_ms(&settings);
-
-    let mut query_params = vec![
-        "encoding=linear16".to_string(),
-        "channels=1".to_string(),
-        format!("sample_rate={}", MIX_SAMPLE_RATE),
-        format!("model={}", model),
-        format!("language={}", language),
-        format!("interim_results={}", interim_results),
-        "diarize=true".to_string(),
-        "punctuate=true".to_string(),
-        "smart_format=false".to_string(),
-    ];
-
-    if interim_results {
-        query_params.push(format!("utterance_end_ms={}", utterance_end_ms));
-    }
-
-    if let Some(endpointing_ms) = effective_endpointing_ms(&settings) {
-        query_params.push(format!("endpointing={}", endpointing_ms));
-    }
-
-    let ws_url = format!("wss://api.deepgram.com/v1/listen?{}", query_params.join("&"));
-
-    let mut request = match ws_url.into_client_request() {
-        Ok(request) => request,
+    let stt_provider = SttProvider::from_settings(&settings)?;
+    let stt_runtime = match start_stt_runtime(app.clone(), session_id.clone(), &settings).await {
+        Ok(runtime) => runtime,
         Err(err) => {
             shutdown_all_captures(captures).await;
-            return Err(format!("websocket request error: {}", err));
-        }
-    };
-    let auth = format!("Token {}", deepgram_api_key);
-    let auth_header = match tokio_tungstenite::tungstenite::http::HeaderValue::from_str(&auth) {
-        Ok(header) => header,
-        Err(err) => {
-            shutdown_all_captures(captures).await;
-            return Err(err.to_string());
-        }
-    };
-    request.headers_mut().insert("Authorization", auth_header);
-
-    let (ws_stream, _) = match connect_async(request).await {
-        Ok(stream) => stream,
-        Err(err) => {
-            shutdown_all_captures(captures).await;
-            return Err(format!("Deepgram connection error: {}", err));
+            return Err(err);
         }
     };
 
     emit_connection_status(&app, "connected");
-    let (mut ws_writer, mut ws_reader) = ws_stream.split();
-
     log::info!(
-        "Mixed stream started (sources: {}, sample_rate: {})",
+        "Mixed stream started (provider: {}, sources: {}, sample_rate: {})",
+        stt_provider.as_str(),
         captures.len(),
         MIX_SAMPLE_RATE
     );
@@ -504,65 +689,29 @@ async fn run_mixed_stream(
 
     let stream_result = if captures.len() == 1 {
         let capture = captures.remove(0);
-        run_single_capture_loop(
-            &app,
-            &session_id,
-            &mut stop_rx,
-            &mut ws_writer,
-            &mut ws_reader,
-            capture,
-        )
-        .await
+        run_single_capture_loop(&mut stop_rx, &stt_runtime, capture).await
     } else {
         let primary = captures.remove(0);
         let secondary = captures.remove(0);
-        run_mixed_capture_loop(
-            &app,
-            &session_id,
-            &mut stop_rx,
-            &mut ws_writer,
-            &mut ws_reader,
-            primary,
-            secondary,
-        )
-        .await
+        run_mixed_capture_loop(&mut stop_rx, &stt_runtime, primary, secondary).await
     };
 
-    if let Err(err) = send_control_message(&mut ws_writer, FINALIZE_PAYLOAD).await {
-        log::debug!("Deepgram Finalize send skipped: {}", err);
-    }
-    let _ = ws_writer.send(Message::Close(None)).await;
-
+    stt_runtime.shutdown().await;
     emit_connection_status(&app, "disconnected");
     log::info!("Mixed stream stopped");
     stream_result
 }
 
-async fn run_single_capture_loop<W, R>(
-    app: &AppHandle,
-    session_id: &str,
+async fn run_single_capture_loop(
     stop_rx: &mut broadcast::Receiver<()>,
-    ws_writer: &mut W,
-    ws_reader: &mut R,
+    stt_runtime: &SttRuntime,
     capture: SourceCapture,
-) -> Result<(), String>
-where
-    W: futures_util::sink::Sink<Message> + Unpin,
-    W::Error: std::fmt::Display,
-    R: futures_util::stream::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
-        + Unpin,
-{
+) -> Result<(), String> {
     let source_rate = capture.sample_rate;
     let mut audio_rx = capture.audio_rx;
     let handle = capture.handle;
-    let mut keep_alive_tick = tokio::time::interval(Duration::from_secs(KEEP_ALIVE_INTERVAL_SECS));
-    keep_alive_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    keep_alive_tick.tick().await;
-    let mut sent_audio_since_keepalive = false;
-    let mut sent_samples = 0usize;
     let mut dropped_chunks = 0usize;
     let mut last_drop_log = Instant::now();
-    let mut latency_monitor = StreamLatencyMonitor::default();
 
     let loop_result: Result<(), String> = loop {
         tokio::select! {
@@ -586,64 +735,21 @@ where
                 if mixed.is_empty() {
                     continue;
                 }
-                ws_writer
-                    .send(Message::Binary(pcm_i16_to_le_bytes(&mixed)))
-                    .await
-                    .map_err(|e| format!("websocket write error: {}", e))?;
-                sent_samples += mixed.len();
-                sent_audio_since_keepalive = true;
-            }
-            _ = keep_alive_tick.tick() => {
-                if !sent_audio_since_keepalive {
-                    send_control_message(ws_writer, KEEP_ALIVE_PAYLOAD)
-                        .await
-                        .map_err(|e| format!("websocket keepalive error: {}", e))?;
-                }
-                sent_audio_since_keepalive = false;
-            }
-            incoming = ws_reader.next() => {
-                match incoming {
-                    Some(Ok(Message::Text(text))) => {
-                        let audio_cursor_seconds = audio_cursor_seconds(sent_samples);
-                        if let Err(err) = handle_deepgram_text_message(
-                            app,
-                            session_id,
-                            &text,
-                            audio_cursor_seconds,
-                            &mut latency_monitor,
-                        ) {
-                            log::warn!("transcript parse error: {}", err);
-                        }
-                    }
-                    Some(Ok(Message::Close(_))) => break Ok(()),
-                    Some(Ok(_)) => {}
-                    Some(Err(err)) => break Err(format!("websocket read error: {}", err)),
-                    None => break Ok(()),
-                }
+                stt_runtime.send_audio(mixed)?;
             }
         }
     };
 
     shutdown_capture(handle).await;
-
     loop_result
 }
 
-async fn run_mixed_capture_loop<W, R>(
-    app: &AppHandle,
-    session_id: &str,
+async fn run_mixed_capture_loop(
     stop_rx: &mut broadcast::Receiver<()>,
-    ws_writer: &mut W,
-    ws_reader: &mut R,
+    stt_runtime: &SttRuntime,
     primary: SourceCapture,
     secondary: SourceCapture,
-) -> Result<(), String>
-where
-    W: futures_util::sink::Sink<Message> + Unpin,
-    W::Error: std::fmt::Display,
-    R: futures_util::stream::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
-        + Unpin,
-{
+) -> Result<(), String> {
     let mut rx_primary = primary.audio_rx;
     let mut rx_secondary = secondary.audio_rx;
 
@@ -657,17 +763,11 @@ where
     let mut secondary_closed = false;
     let mut tick = tokio::time::interval(Duration::from_millis(20));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut keep_alive_tick = tokio::time::interval(Duration::from_secs(KEEP_ALIVE_INTERVAL_SECS));
-    keep_alive_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    keep_alive_tick.tick().await;
-    let mut sent_audio_since_keepalive = false;
-    let mut sent_samples = 0usize;
     let mut dropped_primary_chunks = 0usize;
     let mut dropped_secondary_chunks = 0usize;
     let mut dropped_primary_frames = 0usize;
     let mut dropped_secondary_frames = 0usize;
     let mut last_drop_log = Instant::now();
-    let mut latency_monitor = StreamLatencyMonitor::default();
     let mut mix_diagnostics = MixDiagnostics::new();
 
     let loop_result: Result<(), String> = loop {
@@ -705,12 +805,7 @@ where
             }
             _ = tick.tick() => {
                 if let Some(mixed) = mix_two_buffers(&mut buf_primary, &mut buf_secondary, MIX_CHUNK_FRAMES) {
-                    ws_writer
-                        .send(Message::Binary(pcm_i16_to_le_bytes(&mixed)))
-                        .await
-                        .map_err(|e| format!("websocket write error: {}", e))?;
-                    sent_samples += mixed.len();
-                    sent_audio_since_keepalive = true;
+                    stt_runtime.send_audio(mixed)?;
                 }
 
                 if last_drop_log.elapsed() >= Duration::from_secs(2) {
@@ -733,39 +828,11 @@ where
                 mix_diagnostics.emit_if_due(
                     buf_primary.len(),
                     buf_secondary.len(),
-                    latency_monitor.latest_lag_ms(),
+                    stt_runtime.latest_lag_ms(),
                 );
 
                 if primary_closed && secondary_closed && buf_primary.is_empty() && buf_secondary.is_empty() {
                     break Ok(());
-                }
-            }
-            _ = keep_alive_tick.tick() => {
-                if !sent_audio_since_keepalive {
-                    send_control_message(ws_writer, KEEP_ALIVE_PAYLOAD)
-                        .await
-                        .map_err(|e| format!("websocket keepalive error: {}", e))?;
-                }
-                sent_audio_since_keepalive = false;
-            }
-            incoming = ws_reader.next() => {
-                match incoming {
-                    Some(Ok(Message::Text(text))) => {
-                        let audio_cursor_seconds = audio_cursor_seconds(sent_samples);
-                        if let Err(err) = handle_deepgram_text_message(
-                            app,
-                            session_id,
-                            &text,
-                            audio_cursor_seconds,
-                            &mut latency_monitor,
-                        ) {
-                            log::warn!("transcript parse error: {}", err);
-                        }
-                    }
-                    Some(Ok(Message::Close(_))) => break Ok(()),
-                    Some(Ok(_)) => {}
-                    Some(Err(err)) => break Err(format!("websocket read error: {}", err)),
-                    None => break Ok(()),
                 }
             }
         }
@@ -773,7 +840,6 @@ where
 
     shutdown_capture(primary_handle).await;
     shutdown_capture(secondary_handle).await;
-
     loop_result
 }
 
@@ -1082,19 +1148,6 @@ fn mix_two_buffers(
     Some(out)
 }
 
-fn audio_cursor_seconds(sent_samples: usize) -> f64 {
-    sent_samples as f64 / MIX_SAMPLE_RATE as f64
-}
-
-fn extract_transcript_cursor_seconds(value: &serde_json::Value) -> Option<f64> {
-    let start = value.get("start").and_then(|v| v.as_f64())?;
-    let duration = value
-        .get("duration")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.0);
-    Some((start + duration).max(0.0))
-}
-
 fn drain_audio_backlog(
     rx: &mut mpsc::UnboundedReceiver<Vec<i16>>,
     first_chunk: Vec<i16>,
@@ -1163,24 +1216,67 @@ fn detect_dominant_source(mic_db_avg: f64, sys_db_avg: f64) -> DominantSource {
     }
 }
 
-fn effective_utterance_end_ms(settings: &AppSettings) -> u32 {
+fn effective_chunk_ms(settings: &AppSettings) -> u32 {
     if settings.utterance_end_ms == 0 {
         return 1_000;
     }
     settings.utterance_end_ms.clamp(1_000, 5_000)
 }
 
-fn effective_endpointing_ms(settings: &AppSettings) -> Option<u32> {
-    if settings.endpointing == 0 {
-        return None;
+fn effective_stt_language(settings: &AppSettings) -> String {
+    if settings.stt_language.trim().is_empty() {
+        return DEFAULT_FASTER_WHISPER_LANGUAGE.to_string();
+    }
+    settings.stt_language.trim().to_string()
+}
+
+fn effective_stt_model(settings: &AppSettings) -> String {
+    let candidate = if !settings.stt_model.trim().is_empty() {
+        settings.stt_model.trim().to_string()
+    } else if let Ok(from_env) = std::env::var("FASTER_WHISPER_MODEL") {
+        if !from_env.trim().is_empty() {
+            from_env.trim().to_string()
+        } else {
+            DEFAULT_FASTER_WHISPER_MODEL.to_string()
+        }
+    } else {
+        DEFAULT_FASTER_WHISPER_MODEL.to_string()
+    };
+
+    let normalized = candidate.to_ascii_lowercase().replace('_', "-");
+    if matches!(
+        normalized.as_str(),
+        "nova"
+            | "nova-2"
+            | "nova-2-general"
+            | "nova-2-meeting"
+            | "nova-2-phonecall"
+            | "nova-2-finance"
+            | "nova-2-conversationalai"
+            | "nova-2-voicemail"
+            | "nova-3"
+    ) {
+        log::warn!(
+            "Legacy STT model '{}' is incompatible with faster-whisper. Falling back to '{}'.",
+            candidate,
+            DEFAULT_FASTER_WHISPER_MODEL
+        );
+        return DEFAULT_FASTER_WHISPER_MODEL.to_string();
     }
 
-    if settings.endpointing == 300 {
-        log::info!("endpointing=300 is treated as legacy default and disabled");
-        return None;
-    }
+    candidate
+}
 
-    Some(settings.endpointing.clamp(10, 5_000))
+fn write_faster_whisper_stream_script() -> Result<std::path::PathBuf, String> {
+    let path = std::env::temp_dir().join("kanpe_faster_whisper_stream.py");
+    std::fs::write(&path, FASTER_WHISPER_STREAM_PY).map_err(|e| {
+        format!(
+            "failed to write faster-whisper helper script to {}: {}",
+            path.display(),
+            e
+        )
+    })?;
+    Ok(path)
 }
 
 fn frames_to_ms(frames: usize) -> usize {
@@ -1195,27 +1291,22 @@ fn pcm_i16_to_le_bytes(samples: &[i16]) -> Vec<u8> {
     out
 }
 
-fn handle_deepgram_text_message(
+fn handle_faster_whisper_stdout_value(
     app: &AppHandle,
     session_id: &str,
-    text: &str,
-    audio_cursor_seconds: f64,
-    latency_monitor: &mut StreamLatencyMonitor,
+    value: &serde_json::Value,
 ) -> Result<(), String> {
-    let value: serde_json::Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
+    let event_type = value
+        .get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
 
-    let is_results = value.get("type").and_then(|v| v.as_str()) == Some("Results");
-    if !is_results {
+    if event_type != "transcript" {
         return Ok(());
     }
 
-    latency_monitor.observe(
-        audio_cursor_seconds,
-        extract_transcript_cursor_seconds(&value),
-    );
-
     let transcript = value
-        .pointer("/channel/alternatives/0/transcript")
+        .get("text")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .trim();
@@ -1224,46 +1315,17 @@ fn handle_deepgram_text_message(
         return Ok(());
     }
 
-    let status = if value
-        .get("is_final")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
-    {
-        "final"
-    } else {
-        "interim"
+    let status = match value.get("status").and_then(|v| v.as_str()) {
+        Some("interim") => "interim",
+        _ => "final",
     };
 
-    let source = extract_speaker_label(&value);
+    let source = value
+        .get("source")
+        .and_then(|v| v.as_str())
+        .unwrap_or(DEFAULT_STT_SOURCE);
 
     append_and_emit_caption(app, session_id, source, status, transcript)
-}
-
-fn extract_speaker_label(value: &serde_json::Value) -> &str {
-    let mut counter: HashMap<i64, usize> = HashMap::new();
-
-    if let Some(words) = value
-        .pointer("/channel/alternatives/0/words")
-        .and_then(|v| v.as_array())
-    {
-        for word in words {
-            if let Some(spk) = word.get("speaker").and_then(|v| v.as_i64()) {
-                *counter.entry(spk).or_insert(0) += 1;
-            }
-        }
-    }
-
-    if let Some((speaker_id, _)) = counter.into_iter().max_by_key(|(_, count)| *count) {
-        return match speaker_id {
-            0 => "SPK1",
-            1 => "SPK2",
-            2 => "SPK3",
-            3 => "SPK4",
-            _ => "SPK",
-        };
-    }
-
-    "SPK"
 }
 
 fn append_and_emit_caption(
@@ -1305,15 +1367,24 @@ fn append_and_emit_caption(
     app.emit("caption", &entry).map_err(|e| e.to_string())
 }
 
-async fn send_control_message<W>(ws_writer: &mut W, payload: &str) -> Result<(), String>
-where
-    W: futures_util::sink::Sink<Message> + Unpin,
-    W::Error: std::fmt::Display,
-{
-    ws_writer
-        .send(Message::Text(payload.to_string().into()))
-        .await
-        .map_err(|e| e.to_string())
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::AppSettings;
+
+    #[test]
+    fn maps_legacy_deepgram_model_to_default_faster_whisper_model() {
+        let mut settings = AppSettings::default();
+        settings.stt_model = "nova-3".to_string();
+        assert_eq!(effective_stt_model(&settings), DEFAULT_FASTER_WHISPER_MODEL);
+    }
+
+    #[test]
+    fn keeps_supported_faster_whisper_model() {
+        let mut settings = AppSettings::default();
+        settings.stt_model = "large-v3".to_string();
+        assert_eq!(effective_stt_model(&settings), "large-v3");
+    }
 }
 
 pub fn emit_connection_status(app: &AppHandle, status: &str) {
