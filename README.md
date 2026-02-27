@@ -6,7 +6,7 @@
 
 ## 主な機能
 
-- **リアルタイム文字起こし** — マイク入力とシステム音声を同時にキャプチャし、Deepgram によるリアルタイム音声認識
+- **リアルタイム文字起こし** — マイク入力とシステム音声を同時にキャプチャし、`faster-whisper` によるローカル音声認識
 - **AI アシスタント** — OpenAI / Anthropic と連携し、会話内容に基づく質問応答・要約を生成
 - **オーバーレイ表示** — 常に最前面に表示されるフローティングウィンドウで、録音中のキャプションと AI 操作にアクセス
 - **セッション管理** — 会話をセッション単位で記録・保存・エクスポート
@@ -38,7 +38,7 @@
 | デスクトップフレームワーク | Tauri v2 |
 | 言語 | Rust |
 | 音声キャプチャ | CPAL |
-| 音声認識 | Deepgram (WebSocket) |
+| 音声認識 | faster-whisper (local process) |
 | LLM | OpenAI / Anthropic |
 | データベース | SQLite |
 | 非同期ランタイム | Tokio |
@@ -48,6 +48,7 @@
 - [Node.js](https://nodejs.org/) >= 18
 - [pnpm](https://pnpm.io/)
 - [Rust](https://www.rust-lang.org/tools/install)
+- Python 3.10+
 - [Tauri v2 の前提条件](https://v2.tauri.app/start/prerequisites/)
 
 ## セットアップ
@@ -71,13 +72,21 @@ pnpm install
 cp .env.example .env
 ```
 
-`.env` を編集し、API キーを設定してください:
+`.env` を編集し、設定値を指定してください:
 
 ```env
-DEEPGRAM_API_KEY=your-deepgram-api-key
+STT_PROVIDER=faster-whisper
+WHISPER_PYTHON_BIN=python3
+FASTER_WHISPER_MODEL=small
 LLM_PROVIDER=openai          # openai または anthropic
 OPENAI_API_KEY=sk-xxx        # OpenAI を使用する場合
 ANTHROPIC_API_KEY=sk-ant-xxx # Anthropic を使用する場合
+```
+
+`faster-whisper` を使うために、Python依存を事前にインストールしてください:
+
+```bash
+pip install faster-whisper numpy
 ```
 
 ### 4. 開発サーバーの起動

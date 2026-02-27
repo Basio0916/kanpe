@@ -24,7 +24,7 @@
 - 会話中に「邪魔しない」オーバーレイでリアルタイム字幕とAI支援を提供する
 - セッション単位で会話履歴とAI出力を振り返れるようにする
 - 権限不足・接続不安定時の状態をUIで明確にし、復帰導線を提供する
-- Deepgram前提のSTT設定をUIから確認できるようにする
+- STTプロバイダー設定をUIから確認・変更できるようにする
 
 ## 4. スコープ
 ### 4.1 MVPで実装する範囲
@@ -44,7 +44,7 @@
 
 ### 4.2 MVP外
 - 組織向け管理（RBAC、監査ログ、SSO）
-- オフラインSTT
+- 高度なローカルSTT最適化
 - 高度な話者分離UI
 - 完全自動の議事録生成ワークフロー
 
@@ -189,7 +189,7 @@
   - Language: UI言語、STT言語、LLM出力言語
   - Permissions: 権限状態の表示
   - Audio: マイク入力、システム音声取得方式、ノイズ抑制
-  - STT: Provider表示、`model=nova-3`, `language=ja`, `interim_results`, `endpointing=300`
+  - STT: Provider表示、`model=small`, `language=ja`, `interim_results`, `endpointing=300`
   - Hotkeys: グローバルショートカット一覧
   - Data: ストレージ使用量、自動削除、全体エクスポート/削除
 
@@ -232,7 +232,7 @@
 - 接続状態を常時可視化し、ユーザー手動再試行を提供
 
 ### NFR-03 セキュリティ
-- Deepgram APIキーはRust側管理（フロント直置き禁止）
+- STT関連の機密設定はRust側管理（フロント直置き禁止）
 - ログに機密情報を出さない
 
 ### NFR-04 プライバシー
@@ -248,20 +248,20 @@
 - フロントエンド: Tauri WebView + React
 - バックエンド: Rust（音声処理、鍵管理、状態管理）
 - 外部:
-  - Deepgram（STT）
+  - STTプロバイダー（初期実装: faster-whisper）
   - LLM API（AI支援）
 
 ### 9.2 データフロー
 1. マイク/システム音声を取得
 2. ソース識別付きで音声ストリーム化
-3. Rust側からDeepgramへ送信
+3. Rust側でSTTプロバイダーへストリーム送信
 4. `interim` / `final` をUIへ配信
 5. `final` とAI応答をセッション単位で保存
 6. Session Detail/Overlayで再利用
 
 ### 9.3 固定方針
-1. STTはDeepgram固定
-   - 初期値: `model=nova-3`, `language=ja`, `interim_results=true`, `endpointing=300`
+1. STTはプロバイダー抽象で実装（初期プロバイダー: faster-whisper）
+   - 初期値: `model=small`, `language=ja`, `interim_results=true`, `endpointing=300`
 2. APIキーはRust側で保持
 3. `MIC` / `SYS` は別ソースとして保持
 
