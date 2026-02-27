@@ -26,7 +26,9 @@ interface ScreenSettingsProps {
 
 export function ScreenSettings({ dict: d, locale, onLocaleChange, onClose }: ScreenSettingsProps) {
   const [activeSection, setActiveSection] = useState<SettingsSection>("general")
+  const [sttProvider, setSttProvider] = useState("faster-whisper")
   const [sttLang, setSttLang] = useState("en")
+  const [sttModel, setSttModel] = useState("small")
   const [llmLang, setLlmLang] = useState("en")
   const overlayVisualMode = useUiSettingsStore((s) => s.overlayVisualMode)
   const setOverlayVisualMode = useUiSettingsStore((s) => s.setOverlayVisualMode)
@@ -37,7 +39,9 @@ export function ScreenSettings({ dict: d, locale, onLocaleChange, onClose }: Scr
       try {
         const settings = await getSettings()
         if (!mounted) return
+        setSttProvider(settings.stt_provider || "faster-whisper")
         setSttLang(settings.stt_language || "en")
+        setSttModel(settings.stt_model || "small")
         setLlmLang(settings.llm_language || "en")
       } catch (error) {
         console.error("Failed to load settings:", error)
@@ -55,6 +59,24 @@ export function ScreenSettings({ dict: d, locale, onLocaleChange, onClose }: Scr
       await updateSettings({ stt_language: value })
     } catch (error) {
       console.error("Failed to update STT language setting:", error)
+    }
+  }
+
+  const handleSttProviderChange = async (value: string) => {
+    setSttProvider(value)
+    try {
+      await updateSettings({ stt_provider: value })
+    } catch (error) {
+      console.error("Failed to update STT provider setting:", error)
+    }
+  }
+
+  const handleSttModelChange = async (value: string) => {
+    setSttModel(value)
+    try {
+      await updateSettings({ stt_model: value })
+    } catch (error) {
+      console.error("Failed to update STT model setting:", error)
     }
   }
 
@@ -280,18 +302,29 @@ export function ScreenSettings({ dict: d, locale, onLocaleChange, onClose }: Scr
                   <Mic className="h-4 w-4 text-primary" />
                 </div>
                 <div className="flex-1">
-                  <span className="block text-sm font-medium text-foreground">{d.deepgram}</span>
-                  <span className="block text-xs text-muted-foreground">{d.deepgramDesc}</span>
+                  <span className="block text-sm font-medium text-foreground">{sttProvider}</span>
+                  <span className="block text-xs text-muted-foreground">{d.sttProviderDesc}</span>
                 </div>
                 <span className="rounded-full bg-success/15 px-2.5 py-1 text-[10px] font-medium text-success">
                   {d.connectedStatus}
                 </span>
               </div>
               <div className="flex flex-col gap-3">
+                <SettingRow label={d.sttProvider} description={d.sttProviderDesc}>
+                  <select
+                    value={sttProvider}
+                    onChange={(e) => void handleSttProviderChange(e.target.value)}
+                    className="w-52 rounded-lg bg-secondary border border-border px-3 py-1.5 text-sm text-foreground outline-none focus:border-primary/40"
+                  >
+                    <option value="faster-whisper">faster-whisper</option>
+                  </select>
+                </SettingRow>
                 <SettingRow label={d.model} description={d.modelDesc}>
-                  <div className="rounded-lg bg-secondary border border-border px-3 py-1.5">
-                    <span className="text-sm font-mono text-foreground">nova-3</span>
-                  </div>
+                  <input
+                    value={sttModel}
+                    onChange={(e) => void handleSttModelChange(e.target.value)}
+                    className="w-52 rounded-lg bg-secondary border border-border px-3 py-1.5 text-sm font-mono text-foreground outline-none focus:border-primary/40"
+                  />
                 </SettingRow>
                 <SettingRow label={d.languageLabel} description={d.languageLabelDesc}>
                   <div className="rounded-lg bg-secondary border border-border px-3 py-1.5">

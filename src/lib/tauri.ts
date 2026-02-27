@@ -203,6 +203,7 @@ export interface AppSettings {
   start_on_login: boolean;
   notifications: boolean;
   locale: string;
+  stt_provider: string;
   stt_language: string;
   llm_language: string;
   mic_input: string;
