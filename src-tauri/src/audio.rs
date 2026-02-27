@@ -4,6 +4,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, Sample, SampleFormat, Stream, StreamConfig};
 use std::collections::VecDeque;
 use std::process::Stdio;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -28,6 +29,8 @@ const DEFAULT_FASTER_WHISPER_MODEL: &str = "small";
 const DEFAULT_FASTER_WHISPER_LANGUAGE: &str = "en";
 const DEFAULT_STT_SOURCE: &str = "SPK";
 const FASTER_WHISPER_STARTUP_TIMEOUT_SECS: u64 = 180;
+const DEFAULT_FASTER_WHISPER_CHUNK_MS: u32 = 1_500;
+const DEFAULT_STT_SEND_AUDIO_FLOOR_DBFS: f64 = -55.0;
 
 pub struct RecordingRuntime {
     pub stop_tx: broadcast::Sender<()>,
@@ -735,6 +738,9 @@ async fn run_single_capture_loop(
                 if mixed.is_empty() {
                     continue;
                 }
+                if !should_send_audio_to_stt(&mixed) {
+                    continue;
+                }
                 stt_runtime.send_audio(mixed)?;
             }
         }
@@ -805,6 +811,9 @@ async fn run_mixed_capture_loop(
             }
             _ = tick.tick() => {
                 if let Some(mixed) = mix_two_buffers(&mut buf_primary, &mut buf_secondary, MIX_CHUNK_FRAMES) {
+                    if !should_send_audio_to_stt(&mixed) {
+                        continue;
+                    }
                     stt_runtime.send_audio(mixed)?;
                 }
 
@@ -1139,13 +1148,25 @@ fn mix_two_buffers(
     let frames = available.min(chunk_frames).max(1);
     let mut out = Vec::with_capacity(frames);
     for _ in 0..frames {
-        let a = primary.pop_front().unwrap_or(0) as i32;
-        let b = secondary.pop_front().unwrap_or(0) as i32;
-        let mixed = ((a + b) / 2).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
-        out.push(mixed);
+        let a = primary.pop_front();
+        let b = secondary.pop_front();
+        match (a, b) {
+            (Some(a), Some(b)) => {
+                let mixed =
+                    ((a as i32 + b as i32) / 2).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+                out.push(mixed);
+            }
+            (Some(a), None) => out.push(a),
+            (None, Some(b)) => out.push(b),
+            (None, None) => break,
+        }
     }
 
-    Some(out)
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
 }
 
 fn drain_audio_backlog(
@@ -1218,9 +1239,11 @@ fn detect_dominant_source(mic_db_avg: f64, sys_db_avg: f64) -> DominantSource {
 
 fn effective_chunk_ms(settings: &AppSettings) -> u32 {
     if settings.utterance_end_ms == 0 {
-        return 1_000;
+        return DEFAULT_FASTER_WHISPER_CHUNK_MS;
     }
-    settings.utterance_end_ms.clamp(1_000, 5_000)
+    settings
+        .utterance_end_ms
+        .clamp(DEFAULT_FASTER_WHISPER_CHUNK_MS, 5_000)
 }
 
 fn effective_stt_language(settings: &AppSettings) -> String {
@@ -1231,40 +1254,80 @@ fn effective_stt_language(settings: &AppSettings) -> String {
 }
 
 fn effective_stt_model(settings: &AppSettings) -> String {
-    let candidate = if !settings.stt_model.trim().is_empty() {
-        settings.stt_model.trim().to_string()
-    } else if let Ok(from_env) = std::env::var("FASTER_WHISPER_MODEL") {
-        if !from_env.trim().is_empty() {
-            from_env.trim().to_string()
-        } else {
-            DEFAULT_FASTER_WHISPER_MODEL.to_string()
+    fn normalize_model_name(raw: &str) -> String {
+        let normalized = raw
+            .to_ascii_lowercase()
+            .replace('_', "-")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join("-");
+        match normalized.as_str() {
+            "largev3" | "large-v3" => "large-v3".to_string(),
+            "largev3-turbo" | "large-v3-turbo" => "large-v3-turbo".to_string(),
+            _ => normalized,
         }
+    }
+
+    fn is_legacy_deepgram_model(normalized: &str) -> bool {
+        matches!(
+            normalized,
+            "nova"
+                | "nova-2"
+                | "nova-2-general"
+                | "nova-2-meeting"
+                | "nova-2-phonecall"
+                | "nova-2-finance"
+                | "nova-2-conversationalai"
+                | "nova-2-voicemail"
+                | "nova-3"
+        )
+    }
+
+    let model_from_env = std::env::var("FASTER_WHISPER_MODEL")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    let model_from_settings = settings.stt_model.trim().to_string();
+    let has_settings_model = !model_from_settings.is_empty();
+
+    let selected_raw = if has_settings_model {
+        model_from_settings
+    } else if let Some(from_env) = &model_from_env {
+        from_env.clone()
     } else {
         DEFAULT_FASTER_WHISPER_MODEL.to_string()
     };
 
-    let normalized = candidate.to_ascii_lowercase().replace('_', "-");
-    if matches!(
-        normalized.as_str(),
-        "nova"
-            | "nova-2"
-            | "nova-2-general"
-            | "nova-2-meeting"
-            | "nova-2-phonecall"
-            | "nova-2-finance"
-            | "nova-2-conversationalai"
-            | "nova-2-voicemail"
-            | "nova-3"
-    ) {
+    let normalized = normalize_model_name(&selected_raw);
+    if is_legacy_deepgram_model(&normalized) {
+        if let Some(from_env) = &model_from_env {
+            let env_normalized = normalize_model_name(from_env);
+            if !is_legacy_deepgram_model(&env_normalized) {
+                log::warn!(
+                    "Legacy STT model '{}' in settings is incompatible with faster-whisper. Using FASTER_WHISPER_MODEL='{}'.",
+                    selected_raw,
+                    env_normalized
+                );
+                return env_normalized;
+            }
+        }
+    }
+
+    if is_legacy_deepgram_model(&normalized) {
         log::warn!(
             "Legacy STT model '{}' is incompatible with faster-whisper. Falling back to '{}'.",
-            candidate,
+            selected_raw,
             DEFAULT_FASTER_WHISPER_MODEL
         );
         return DEFAULT_FASTER_WHISPER_MODEL.to_string();
     }
 
-    candidate
+    if normalized.is_empty() {
+        return DEFAULT_FASTER_WHISPER_MODEL.to_string();
+    }
+
+    // Keep normalized model ID to support aliases like "large v3" -> "large-v3".
+    normalized
 }
 
 fn write_faster_whisper_stream_script() -> Result<std::path::PathBuf, String> {
@@ -1281,6 +1344,24 @@ fn write_faster_whisper_stream_script() -> Result<std::path::PathBuf, String> {
 
 fn frames_to_ms(frames: usize) -> usize {
     frames.saturating_mul(1_000) / MIX_SAMPLE_RATE as usize
+}
+
+fn stt_send_audio_floor_dbfs() -> f64 {
+    static VALUE: OnceLock<f64> = OnceLock::new();
+    *VALUE.get_or_init(|| {
+        std::env::var("STT_SEND_AUDIO_FLOOR_DBFS")
+            .ok()
+            .and_then(|raw| raw.trim().parse::<f64>().ok())
+            .map(|v| v.clamp(-120.0, -10.0))
+            .unwrap_or(DEFAULT_STT_SEND_AUDIO_FLOOR_DBFS)
+    })
+}
+
+fn should_send_audio_to_stt(samples: &[i16]) -> bool {
+    if samples.is_empty() {
+        return false;
+    }
+    rms_dbfs(samples) >= stt_send_audio_floor_dbfs()
 }
 
 fn pcm_i16_to_le_bytes(samples: &[i16]) -> Vec<u8> {
