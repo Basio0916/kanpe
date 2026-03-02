@@ -1,6 +1,14 @@
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
+import { useAiAction } from "../hooks/useAiAction";
 import { useChat } from "../hooks/useChat";
-import type { ChatMessage as ChatMessageType } from "../lib/types";
+import type { AiAction, ChatMessage as ChatMessageType } from "../lib/types";
+
+const AI_ACTIONS: { id: AiAction; label: string }[] = [
+	{ id: "recap", label: "Recap" },
+	{ id: "assist", label: "Assist" },
+	{ id: "question", label: "Question" },
+	{ id: "action", label: "Action" },
+];
 
 function ChatMessage({ message }: { message: ChatMessageType }) {
 	const isUser = message.role === "user";
@@ -66,8 +74,11 @@ function ChatInput({
 }
 
 export function ChatPanel() {
-	const { chatHistory, sendMessage, isLoading } = useChat();
+	const { chatHistory, sendMessage, isLoading: isChatLoading } = useChat();
+	const { executeAction, isLoading: isAiLoading } = useAiAction();
 	const bottomRef = useRef<HTMLDivElement>(null);
+
+	const isLoading = isChatLoading || isAiLoading;
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: scroll on new messages
 	useEffect(() => {
@@ -98,6 +109,19 @@ export function ChatPanel() {
 					</div>
 				)}
 				<div ref={bottomRef} />
+			</div>
+			<div className="flex gap-2 px-3 pb-2">
+				{AI_ACTIONS.map((action) => (
+					<button
+						key={action.id}
+						type="button"
+						onClick={() => executeAction(action.id)}
+						disabled={isLoading}
+						className="flex-1 px-3 py-1.5 text-xs bg-gray-100 hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors"
+					>
+						{action.label}
+					</button>
+				))}
 			</div>
 			<ChatInput onSend={sendMessage} disabled={isLoading} />
 		</div>

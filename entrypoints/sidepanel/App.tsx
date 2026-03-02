@@ -1,5 +1,3 @@
-import { AiActionBar } from "../../components/AiActionBar";
-import { AiResponsePanel } from "../../components/AiResponsePanel";
 import { ChatPanel } from "../../components/ChatPanel";
 import { SettingsPanel } from "../../components/SettingsPanel";
 import { TranscriptPanel } from "../../components/TranscriptPanel";
@@ -16,13 +14,7 @@ export default function App() {
 	return (
 		<div className="flex flex-col h-screen bg-white text-gray-900">
 			<Header />
-			{currentView === "transcript" && (
-				<>
-					<TranscriptPanel />
-					<AiActionBar />
-					<AiResponsePanel />
-				</>
-			)}
+			{currentView === "transcript" && <TranscriptPanel />}
 			{currentView === "chat" && <ChatPanel />}
 			{currentView === "settings" && <SettingsPanel />}
 		</div>
