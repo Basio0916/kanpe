@@ -8,12 +8,23 @@ import type { Utterance } from "../lib/types";
 // Low stability (obfuscated class names, change per deploy):
 //   .vNKgIf, .nMcdL, .NWpY1d, .ygicle — DO NOT use
 
-export const SELECTORS = {
-	ccButtonEn: 'button[aria-label="Turn on captions"]',
-	ccButtonJa: 'button[aria-label="字幕をオンにする"]',
-	ccButtonActiveEn: 'button[aria-label="Turn off captions"]',
-	ccButtonActiveJa: 'button[aria-label="字幕をオフにする"]',
-} as const;
+/**
+ * Find a button whose aria-label contains one of the given keywords.
+ * More resilient than exact-match selectors because Google Meet
+ * occasionally appends keyboard-shortcut hints (e.g. "(c)") or
+ * changes wording slightly.
+ */
+export function findButtonByLabel(
+	keywords: string[],
+): HTMLButtonElement | null {
+	for (const btn of document.querySelectorAll<HTMLButtonElement>(
+		"button[aria-label]",
+	)) {
+		const label = btn.getAttribute("aria-label") ?? "";
+		if (keywords.some((kw) => label.includes(kw))) return btn;
+	}
+	return null;
+}
 
 // Track last utterance for deduplication
 let lastUtterance: { speaker: string; text: string } | null = null;
