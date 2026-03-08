@@ -1,4 +1,5 @@
 import { defineExtensionMessaging } from "@webext-core/messaging";
+import type { ProviderSettings } from "./ai-provider";
 import type { AiAction, AiResponse, ChatMessage, Utterance } from "./types";
 
 interface ProtocolMap {
@@ -30,8 +31,8 @@ interface ProtocolMap {
 	}): AiResponse;
 
 	// Settings
-	"settings:getApiKey"(): string | null;
-	"settings:setApiKey"(key: string): void;
+	"settings:getProviderSettings"(): ProviderSettings;
+	"settings:setProviderSettings"(settings: ProviderSettings): void;
 }
 
 export const messenger = defineExtensionMessaging<ProtocolMap>();
