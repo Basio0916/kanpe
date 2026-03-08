@@ -204,25 +204,46 @@ export default defineBackground(() => {
 		messenger.sendMessage("meet:ended:relay", undefined);
 	}
 
+	// Helper: check if URL is a Google Meet meeting
+	function isMeetUrl(url: string | undefined): boolean {
+		return !!url?.match(/^https:\/\/meet\.google\.com\/.+/);
+	}
+
+	// Helper: send meet context to side panel
+	function sendMeetContext(isMeeting: boolean) {
+		messenger.sendMessage("meet:context", { isMeeting });
+	}
+
+	// SidePanel init: respond with current tab's Meet context
+	messenger.onMessage("sidepanel:init", async () => {
+		const [tab] = await chrome.tabs.query({
+			active: true,
+			currentWindow: true,
+		});
+		return { isMeeting: isMeetUrl(tab?.url) };
+	});
+
 	// Detect Meet tab navigation away
 	chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 		// Meet end detection: URL changed to non-Meet
 		if (
 			activeMeetTabs.has(tabId) &&
 			changeInfo.url &&
-			!changeInfo.url.match(/^https:\/\/meet\.google\.com\/.+/)
+			!isMeetUrl(changeInfo.url)
 		) {
 			notifyMeetEnded(tabId);
 		}
 
-		// Auto-open side panel on Google Meet tabs
-		if (tab.url?.match(/^https:\/\/meet\.google\.com\/.+/)) {
-			chrome.sidePanel.setOptions({
-				tabId,
-				path: "sidepanel.html",
-				enabled: true,
-			});
+		// Notify side panel of context change on URL update
+		if (changeInfo.url) {
+			sendMeetContext(isMeetUrl(changeInfo.url));
 		}
+	});
+
+	// Detect tab switch: notify side panel of context change
+	chrome.tabs.onActivated.addListener(async ({ tabId }) => {
+		const tab = await chrome.tabs.get(tabId);
+		sendMeetContext(isMeetUrl(tab.url));
 	});
 
 	// Detect Meet tab closed
@@ -230,7 +251,7 @@ export default defineBackground(() => {
 		notifyMeetEnded(tabId);
 	});
 
-	// Default: disable side panel
-	chrome.sidePanel.setOptions({ enabled: false });
+	// Side panel always enabled
+	chrome.sidePanel.setOptions({ enabled: true });
 	chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 });

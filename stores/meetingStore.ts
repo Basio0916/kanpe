@@ -23,6 +23,10 @@ interface MeetingState {
 	currentView: View;
 	setView: (view: View) => void;
 
+	// Meeting context
+	isMeetingContext: boolean;
+	setMeetingContext: (isMeeting: boolean) => void;
+
 	// Session fields
 	sessionId: string | null;
 	meetUrl: string | null;
@@ -40,6 +44,7 @@ const initialState = {
 	chatHistory: [] as ChatMessage[],
 	isAiLoading: false,
 	currentView: "transcript" as View,
+	isMeetingContext: false,
 	sessionId: null as string | null,
 	meetUrl: null as string | null,
 	sessionCreatedAt: null as string | null,
@@ -71,6 +76,8 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
 	setAiLoading: (loading) => set({ isAiLoading: loading }),
 
 	setView: (view) => set({ currentView: view }),
+
+	setMeetingContext: (isMeeting) => set({ isMeetingContext: isMeeting }),
 
 	setSessionId: (id) =>
 		set({

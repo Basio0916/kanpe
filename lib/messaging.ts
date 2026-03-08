@@ -56,6 +56,11 @@ interface ProtocolMap {
 	// Meet ended: Background → SidePanel
 	"meet:ended:relay"(): void;
 
+	// Meet context: Background → SidePanel
+	"meet:context"(data: { isMeeting: boolean }): void;
+	// SidePanel → Background (init)
+	"sidepanel:init"(): { isMeeting: boolean };
+
 	// Session viewer: SidePanel → Background
 	"session:open-viewer"(data: { id: string }): void;
 }

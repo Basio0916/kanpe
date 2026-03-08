@@ -1,9 +1,14 @@
 import type { View } from "../../lib/types";
 import { useMeetingStore } from "../../stores/meetingStore";
 
-const TABS: { id: View; label: string }[] = [
+const ALL_TABS: { id: View; label: string }[] = [
 	{ id: "transcript", label: "Transcript" },
 	{ id: "chat", label: "Chat" },
+	{ id: "sessions", label: "Sessions" },
+	{ id: "settings", label: "Settings" },
+];
+
+const NON_MEET_TABS: { id: View; label: string }[] = [
 	{ id: "sessions", label: "Sessions" },
 	{ id: "settings", label: "Settings" },
 ];
@@ -11,6 +16,9 @@ const TABS: { id: View; label: string }[] = [
 export function Header() {
 	const currentView = useMeetingStore((s) => s.currentView);
 	const setView = useMeetingStore((s) => s.setView);
+	const isMeetingContext = useMeetingStore((s) => s.isMeetingContext);
+
+	const tabs = isMeetingContext ? ALL_TABS : NON_MEET_TABS;
 
 	return (
 		<header className="sticky top-0 z-10 border-b bg-white px-4 py-3">
@@ -18,7 +26,7 @@ export function Header() {
 				<h1 className="text-lg font-bold text-gray-900">Kanpe</h1>
 			</div>
 			<nav className="flex gap-1">
-				{TABS.map((tab) => (
+				{tabs.map((tab) => (
 					<button
 						key={tab.id}
 						type="button"
