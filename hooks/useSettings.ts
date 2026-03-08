@@ -1,30 +1,59 @@
 import { useEffect, useState } from "react";
+import type { ProviderId, ProviderSettings } from "../lib/ai-provider";
 import { messenger } from "../lib/messaging";
+import { DEFAULT_SETTINGS } from "../lib/provider-settings";
 
 export function useSettings() {
-	const [apiKey, setApiKey] = useState("");
-	const [isValid, setIsValid] = useState<boolean | null>(null);
+	const [settings, setSettings] = useState<ProviderSettings>(DEFAULT_SETTINGS);
 	const [isSaving, setIsSaving] = useState(false);
+	const [saveResult, setSaveResult] = useState<"success" | "error" | null>(
+		null,
+	);
 
 	useEffect(() => {
-		messenger.sendMessage("settings:getApiKey", undefined).then((key) => {
-			if (key) setApiKey(key);
-		});
+		messenger
+			.sendMessage("settings:getProviderSettings", undefined)
+			.then(setSettings);
 	}, []);
 
-	const saveApiKey = async (key: string) => {
-		const valid = key.startsWith("sk-ant-");
-		setIsValid(valid);
-		if (!valid) return;
+	const updateProvider = (id: ProviderId) => {
+		setSaveResult(null);
+		setSettings((prev) => ({ ...prev, activeProvider: id }));
+	};
 
+	const updateProviderConfig = <T extends ProviderId>(
+		id: T,
+		partial: Partial<ProviderSettings["configs"][T]>,
+	) => {
+		setSaveResult(null);
+		setSettings((prev) => ({
+			...prev,
+			configs: {
+				...prev.configs,
+				[id]: { ...prev.configs[id], ...partial },
+			},
+		}));
+	};
+
+	const save = async () => {
 		setIsSaving(true);
+		setSaveResult(null);
 		try {
-			await messenger.sendMessage("settings:setApiKey", key);
-			setApiKey(key);
+			await messenger.sendMessage("settings:setProviderSettings", settings);
+			setSaveResult("success");
+		} catch {
+			setSaveResult("error");
 		} finally {
 			setIsSaving(false);
 		}
 	};
 
-	return { apiKey, saveApiKey, isValid, isSaving };
+	return {
+		settings,
+		updateProvider,
+		updateProviderConfig,
+		save,
+		isSaving,
+		saveResult,
+	};
 }
