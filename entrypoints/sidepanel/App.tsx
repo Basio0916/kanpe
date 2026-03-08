@@ -14,9 +14,11 @@ export default function App() {
 	return (
 		<div className="flex flex-col h-screen bg-white text-gray-900">
 			<Header />
-			{currentView === "transcript" && <TranscriptPanel />}
-			{currentView === "chat" && <ChatPanel />}
-			{currentView === "settings" && <SettingsPanel />}
+			<main className="flex-1 min-h-0 overflow-y-auto">
+				{currentView === "transcript" && <TranscriptPanel />}
+				{currentView === "chat" && <ChatPanel />}
+				{currentView === "settings" && <SettingsPanel />}
+			</main>
 		</div>
 	);
 }
