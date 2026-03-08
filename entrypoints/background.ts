@@ -1,10 +1,3 @@
-import {
-	ApiError,
-	callAnthropic,
-	classifyApiError,
-	getApiKey,
-	setApiKey,
-} from "../lib/anthropic";
 import { messenger } from "../lib/messaging";
 import {
 	CHAT_SYSTEM,
@@ -13,6 +6,11 @@ import {
 	formatTranscript,
 	truncateTranscript,
 } from "../lib/prompts";
+import {
+	getProviderSettings,
+	setProviderSettings,
+} from "../lib/provider-settings";
+import { ApiError, classifyApiError, getProvider } from "../lib/providers";
 import type { AiAction } from "../lib/types";
 
 export default defineBackground(() => {
@@ -25,11 +23,15 @@ export default defineBackground(() => {
 
 	// Handle AI action requests
 	messenger.onMessage("ai:request", async ({ data }) => {
-		const apiKey = await getApiKey();
-		if (!apiKey) {
+		const settings = await getProviderSettings();
+		const provider = getProvider(settings.activeProvider);
+		const config = settings.configs[settings.activeProvider];
+
+		const validationError = provider.validateConfig(config);
+		if (validationError) {
 			return {
 				action: data.action,
-				content: "Please set your API key in Settings.",
+				content: validationError,
 				timestamp: new Date().toISOString(),
 			};
 		}
@@ -38,9 +40,11 @@ export default defineBackground(() => {
 			const truncated = truncateTranscript(data.utterances);
 			const transcript = formatTranscript(truncated);
 			const prompt = PROMPTS[data.action as AiAction];
-			const result = await callAnthropic(apiKey, prompt.system, [
-				{ role: "user", content: prompt.userTemplate(transcript) },
-			]);
+			const result = await provider.call(
+				prompt.system,
+				[{ role: "user", content: prompt.userTemplate(transcript) }],
+				config,
+			);
 			return {
 				action: data.action,
 				content: result,
@@ -66,11 +70,15 @@ export default defineBackground(() => {
 
 	// Handle chat messages
 	messenger.onMessage("chat:send", async ({ data }) => {
-		const apiKey = await getApiKey();
-		if (!apiKey) {
+		const settings = await getProviderSettings();
+		const provider = getProvider(settings.activeProvider);
+		const config = settings.configs[settings.activeProvider];
+
+		const validationError = provider.validateConfig(config);
+		if (validationError) {
 			return {
 				action: "chat",
-				content: "Please set your API key in Settings.",
+				content: validationError,
 				timestamp: new Date().toISOString(),
 			};
 		}
@@ -83,7 +91,7 @@ export default defineBackground(() => {
 				data.history,
 				data.message,
 			);
-			const result = await callAnthropic(apiKey, CHAT_SYSTEM, messages);
+			const result = await provider.call(CHAT_SYSTEM, messages, config);
 			return {
 				action: "chat",
 				content: result,
@@ -108,12 +116,12 @@ export default defineBackground(() => {
 	});
 
 	// Settings handlers
-	messenger.onMessage("settings:getApiKey", async () => {
-		return await getApiKey();
+	messenger.onMessage("settings:getProviderSettings", async () => {
+		return await getProviderSettings();
 	});
 
-	messenger.onMessage("settings:setApiKey", async ({ data }) => {
-		await setApiKey(data);
+	messenger.onMessage("settings:setProviderSettings", async ({ data }) => {
+		await setProviderSettings(data);
 	});
 
 	// Auto-open side panel on Google Meet tabs
