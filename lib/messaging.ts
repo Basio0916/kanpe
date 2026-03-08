@@ -46,6 +46,8 @@ interface ProtocolMap {
 	"session:get"(data: { id: string }): Session | null;
 	"session:save"(data: Session): void;
 	"session:delete"(data: { id: string }): void;
+	"session:update-title"(data: { id: string; title: string }): void;
+	"session:generate-title"(data: { utterances: Utterance[] }): string;
 
 	// Meet URL: Content → Background → SidePanel
 	"meet:url"(data: { url: string }): void;

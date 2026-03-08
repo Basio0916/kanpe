@@ -2,6 +2,7 @@ import { messenger } from "../lib/messaging";
 import {
 	CHAT_SYSTEM,
 	PROMPTS,
+	TITLE_GENERATION,
 	buildChatMessages,
 	formatTranscript,
 	truncateTranscript,
@@ -16,6 +17,7 @@ import {
 	getSession,
 	getSessionIndex,
 	saveSession,
+	updateSessionTitle,
 } from "../lib/session-storage";
 import type { AiAction } from "../lib/types";
 
@@ -148,6 +150,30 @@ export default defineBackground(() => {
 
 	messenger.onMessage("session:delete", async ({ data }) => {
 		await deleteSession(data.id);
+	});
+
+	messenger.onMessage("session:update-title", async ({ data }) => {
+		await updateSessionTitle(data.id, data.title);
+	});
+
+	messenger.onMessage("session:generate-title", async ({ data }) => {
+		const settings = await getProviderSettings();
+		const provider = getProvider(settings.activeProvider);
+		const config = settings.configs[settings.activeProvider];
+
+		const validationError = provider.validateConfig(config);
+		if (validationError) {
+			throw new Error(validationError);
+		}
+
+		const truncated = truncateTranscript(data.utterances);
+		const transcript = formatTranscript(truncated);
+		const result = await provider.call(
+			TITLE_GENERATION.system,
+			[{ role: "user", content: TITLE_GENERATION.userTemplate(transcript) }],
+			config,
+		);
+		return result.trim();
 	});
 
 	// Relay Meet URL from Content Script to Side Panel & track tab

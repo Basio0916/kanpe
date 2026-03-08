@@ -37,6 +37,24 @@ export async function saveSession(session: Session): Promise<void> {
 	await chrome.storage.local.set({ [INDEX_KEY]: index });
 }
 
+export async function updateSessionTitle(
+	id: string,
+	title: string,
+): Promise<void> {
+	const session = await getSession(id);
+	if (!session) return;
+
+	session.title = title;
+	await chrome.storage.local.set({ [sessionKey(id)]: session });
+
+	const index = await getSessionIndex();
+	const entry = index.find((s) => s.id === id);
+	if (entry) {
+		entry.title = title;
+		await chrome.storage.local.set({ [INDEX_KEY]: index });
+	}
+}
+
 export async function deleteSession(id: string): Promise<void> {
 	await chrome.storage.local.remove(sessionKey(id));
 

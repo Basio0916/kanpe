@@ -49,6 +49,18 @@ You are having a conversation with the meeting participant.
 Use the provided meeting transcript as context to answer their questions.
 If the question is unrelated to the meeting, still try to help but note the context.`;
 
+export const TITLE_GENERATION = {
+	system: `You are Kanpe, an AI meeting assistant.
+Given a meeting transcript, generate a short, descriptive title for the meeting.
+- The title should capture the main topic or purpose of the meeting
+- Keep it concise: 5-10 words maximum
+- Use the same language as the transcript
+- Do NOT include dates, times, or meeting codes
+- Return ONLY the title text, nothing else`,
+	userTemplate: (transcript: string) =>
+		`Here is the meeting transcript:\n\n${transcript}\n\nGenerate a concise title for this meeting.`,
+};
+
 export function formatTranscript(utterances: Utterance[]): string {
 	return utterances
 		.map((u) => `[${u.time}] ${u.speaker}: ${u.text}`)
