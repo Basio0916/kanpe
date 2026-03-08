@@ -1,5 +1,11 @@
 import { create } from "zustand";
-import type { AiResponse, ChatMessage, Utterance, View } from "../lib/types";
+import type {
+	AiResponse,
+	ChatMessage,
+	Session,
+	Utterance,
+	View,
+} from "../lib/types";
 
 interface MeetingState {
 	utterances: Utterance[];
@@ -17,6 +23,14 @@ interface MeetingState {
 	currentView: View;
 	setView: (view: View) => void;
 
+	// Session fields
+	sessionId: string | null;
+	meetUrl: string | null;
+	sessionCreatedAt: string | null;
+
+	setSessionId: (id: string) => void;
+	setMeetUrl: (url: string) => void;
+
 	reset: () => void;
 }
 
@@ -26,9 +40,12 @@ const initialState = {
 	chatHistory: [] as ChatMessage[],
 	isAiLoading: false,
 	currentView: "transcript" as View,
+	sessionId: null as string | null,
+	meetUrl: null as string | null,
+	sessionCreatedAt: null as string | null,
 };
 
-export const useMeetingStore = create<MeetingState>((set) => ({
+export const useMeetingStore = create<MeetingState>((set, get) => ({
 	...initialState,
 
 	addUtterance: (u) =>
@@ -54,6 +71,14 @@ export const useMeetingStore = create<MeetingState>((set) => ({
 	setAiLoading: (loading) => set({ isAiLoading: loading }),
 
 	setView: (view) => set({ currentView: view }),
+
+	setSessionId: (id) =>
+		set({
+			sessionId: id,
+			sessionCreatedAt: new Date().toISOString(),
+		}),
+
+	setMeetUrl: (url) => set({ meetUrl: url }),
 
 	reset: () => set(initialState),
 }));

@@ -11,10 +11,19 @@ import {
 	setProviderSettings,
 } from "../lib/provider-settings";
 import { ApiError, classifyApiError, getProvider } from "../lib/providers";
+import {
+	deleteSession,
+	getSession,
+	getSessionIndex,
+	saveSession,
+} from "../lib/session-storage";
 import type { AiAction } from "../lib/types";
 
 export default defineBackground(() => {
 	console.log("[kanpe] Background service worker started");
+
+	// Track active Meet tabs for end detection
+	const activeMeetTabs = new Set<number>();
 
 	// Relay captions from Content Script to Side Panel
 	messenger.onMessage("caption:new", ({ data }) => {
@@ -124,8 +133,63 @@ export default defineBackground(() => {
 		await setProviderSettings(data);
 	});
 
-	// Auto-open side panel on Google Meet tabs
+	// Session handlers
+	messenger.onMessage("session:list", async () => {
+		return await getSessionIndex();
+	});
+
+	messenger.onMessage("session:get", async ({ data }) => {
+		return await getSession(data.id);
+	});
+
+	messenger.onMessage("session:save", async ({ data }) => {
+		await saveSession(data);
+	});
+
+	messenger.onMessage("session:delete", async ({ data }) => {
+		await deleteSession(data.id);
+	});
+
+	// Relay Meet URL from Content Script to Side Panel & track tab
+	messenger.onMessage("meet:url", ({ data, sender }) => {
+		const tabId = sender.tab?.id;
+		if (tabId != null) {
+			activeMeetTabs.add(tabId);
+			console.log("[kanpe] Meet tab registered:", tabId);
+		}
+		messenger.sendMessage("meet:url:relay", data);
+	});
+
+	// Open session viewer in popup window
+	messenger.onMessage("session:open-viewer", ({ data }) => {
+		chrome.windows.create({
+			url: chrome.runtime.getURL(`/session-viewer.html?id=${data.id}`),
+			type: "popup",
+			width: 900,
+			height: 600,
+		});
+	});
+
+	// Helper: send meet:ended:relay to side panel
+	function notifyMeetEnded(tabId: number) {
+		if (!activeMeetTabs.has(tabId)) return;
+		activeMeetTabs.delete(tabId);
+		console.log("[kanpe] Meet ended for tab:", tabId);
+		messenger.sendMessage("meet:ended:relay", undefined);
+	}
+
+	// Detect Meet tab navigation away
 	chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+		// Meet end detection: URL changed to non-Meet
+		if (
+			activeMeetTabs.has(tabId) &&
+			changeInfo.url &&
+			!changeInfo.url.match(/^https:\/\/meet\.google\.com\/.+/)
+		) {
+			notifyMeetEnded(tabId);
+		}
+
+		// Auto-open side panel on Google Meet tabs
 		if (tab.url?.match(/^https:\/\/meet\.google\.com\/.+/)) {
 			chrome.sidePanel.setOptions({
 				tabId,
@@ -133,6 +197,11 @@ export default defineBackground(() => {
 				enabled: true,
 			});
 		}
+	});
+
+	// Detect Meet tab closed
+	chrome.tabs.onRemoved.addListener((tabId) => {
+		notifyMeetEnded(tabId);
 	});
 
 	// Default: disable side panel

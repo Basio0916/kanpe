@@ -7,7 +7,7 @@ export default defineConfig({
 		name: "Kanpe - Google Meet AI Assistant",
 		description:
 			"AI-powered meeting assistant for Google Meet. Real-time captions, summaries, and suggestions.",
-		permissions: ["sidePanel", "activeTab", "storage"],
+		permissions: ["sidePanel", "activeTab", "storage", "unlimitedStorage"],
 		host_permissions: [
 			"https://meet.google.com/*",
 			"https://api.anthropic.com/*",

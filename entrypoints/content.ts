@@ -16,6 +16,7 @@ export default defineContentScript({
 });
 
 async function init(): Promise<void> {
+	messenger.sendMessage("meet:url", { url: window.location.href });
 	await enableCaptions();
 	observeCaptions();
 }

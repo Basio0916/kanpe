@@ -4,6 +4,7 @@ import { useMeetingStore } from "../../stores/meetingStore";
 const TABS: { id: View; label: string }[] = [
 	{ id: "transcript", label: "Transcript" },
 	{ id: "chat", label: "Chat" },
+	{ id: "sessions", label: "Sessions" },
 	{ id: "settings", label: "Settings" },
 ];
 
