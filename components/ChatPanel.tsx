@@ -1,4 +1,6 @@
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { useAiAction } from "../hooks/useAiAction";
 import { useChat } from "../hooks/useChat";
 import type { AiAction, ChatMessage as ChatMessageType } from "../lib/types";
@@ -19,7 +21,15 @@ function ChatMessage({ message }: { message: ChatMessageType }) {
 					isUser ? "bg-blue-500 text-white" : "bg-gray-100 text-gray-800"
 				}`}
 			>
-				<div className="whitespace-pre-wrap">{message.content}</div>
+				{isUser ? (
+					<div className="whitespace-pre-wrap">{message.content}</div>
+				) : (
+					<div className="prose prose-sm max-w-none">
+						<ReactMarkdown remarkPlugins={[remarkGfm]}>
+							{message.content}
+						</ReactMarkdown>
+					</div>
+				)}
 			</div>
 		</div>
 	);
